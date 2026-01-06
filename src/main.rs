@@ -204,14 +204,15 @@ fn apply_random_underlines(text_view: &ObjCObject) {
             words.push((word_start, text.len()));
         }
         
-        // Get orange color for highlights
+        // Get yellow color for highlights (background)
         let ns_color_class = match ObjCClass::get("NSColor") {
             Some(c) => c,
             None => return,
         };
-        let orange_color = msg_send_id(ns_color_class.as_ptr(), Sel::get("orangeColor").as_ptr());
+        let highlight_color = msg_send_id(ns_color_class.as_ptr(), Sel::get("yellowColor").as_ptr());
         
-        // Apply orange color to every 5th word to simulate spell-check highlights
+        // Apply highlighting to every 5th word to simulate spell-check marks
+        let mut applied_count = 0;
         for (idx, (start_byte, end_byte)) in words.iter().enumerate() {
             if idx % 5 == 2 {
                 // Convert UTF-8 byte positions to UTF-16 character positions
@@ -243,15 +244,24 @@ fn apply_random_underlines(text_view: &ObjCObject) {
                     length: word_len,
                 };
                 
-                // Use addAttribute:value:range: to add color attribute
-                let attr_name = create_nsstring("NSForegroundColorAttributeName");
-                
                 type MsgSendVoidIdIdRange = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, NSRange);
                 let f: MsgSendVoidIdIdRange = std::mem::transmute(ffi::objc_msgSend as *const ());
                 
-                // Call: [textStorage addAttribute:@"NSForegroundColorAttributeName" value:orangeColor range:range]
-                f(text_storage.as_ptr(), Sel::get("addAttribute:value:range:").as_ptr() as *mut std::ffi::c_void, attr_name, orange_color, range);
+                // Apply yellow background highlighting
+                let bg_attr_name = create_nsstring("NSBackgroundColorAttributeName");
+                f(text_storage.as_ptr(), Sel::get("addAttribute:value:range:").as_ptr() as *mut std::ffi::c_void, bg_attr_name, highlight_color, range);
+                
+                // Apply red foreground color text
+                let orange_color = msg_send_id(ns_color_class.as_ptr(), Sel::get("redColor").as_ptr());
+                let color_attr_name = create_nsstring("NSForegroundColorAttributeName");
+                f(text_storage.as_ptr(), Sel::get("addAttribute:value:range:").as_ptr() as *mut std::ffi::c_void, color_attr_name, orange_color, range);
+                
+                applied_count += 1;
             }
+        }
+        
+        if applied_count > 0 {
+            eprintln!("Applied highlighting to {} words", applied_count);
         }
     }
 }
@@ -855,12 +865,10 @@ extern "C" fn open_file(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_voi
                                 msg_send_void_id(line_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), line_str);
                             }
                             
-                            // TODO: Apply random color highlighting - currently disabled due to NSRange UTF-16 issues
-                            // NSString uses UTF-16 internally but we're calculating byte positions in UTF-8
-                            // This causes "Out of bounds" NSRangeException when adding attributes
-                            // if let Some(tv) = TEXT_VIEW {
-                            //     apply_random_underlines(&tv);
-                            // }
+                            // Apply orange highlighting with underline to every 5th word
+                            if let Some(tv) = TEXT_VIEW {
+                                apply_random_underlines(&tv);
+                            }
                         }
                     }
                 }
