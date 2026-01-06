@@ -232,6 +232,9 @@ fn setup_window_ui(window: &ObjCObject) {
     msg_send_void_id(window.as_ptr(), Sel::get("setDelegate:").as_ptr(), delegate.as_ptr());
 }
 
+/// Global references to UI elements (used for layout updates)
+static mut UI_ELEMENTS: Option<(ObjCObject, ObjCObject, ObjCObject)> = None;
+
 /// Create the UI elements (toolbar, text view, status bar)
 fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, ObjCObject) {
     let ns_view_class = ObjCClass::get("NSView").expect("Failed to get NSView class");
@@ -280,6 +283,11 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     msg_send_void_id(status_bar.as_ptr(), Sel::get("setBackgroundColor:").as_ptr(), dark_gray);
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), status_bar.as_ptr());
     
+    // Store references globally for layout updates
+    unsafe {
+        UI_ELEMENTS = Some((toolbar, text_view, status_bar));
+    }
+    
     (toolbar, text_view, status_bar)
 }
 
@@ -297,41 +305,35 @@ fn layout_ui_elements(window: &ObjCObject) {
     let status_bar_height = 20.0;
     let text_view_height = content_height - toolbar_height - status_bar_height;
     
-    // Get subviews
-    let subviews = msg_send_id(content_view.as_ptr(), Sel::get("subviews").as_ptr());
-    
-    // Layout toolbar (top)
-    let toolbar_frame = NSRect {
-        origin: NSPoint { x: 0.0, y: content_height - toolbar_height },
-        size: NSSize { width: content_width, height: toolbar_height },
-    };
-    layout_view_at_index(subviews, 0, toolbar_frame);
-    
-    // Layout status bar (bottom)
-    let status_bar_frame = NSRect {
-        origin: NSPoint { x: 0.0, y: 0.0 },
-        size: NSSize { width: content_width, height: status_bar_height },
-    };
-    layout_view_at_index(subviews, 2, status_bar_frame);
-    
-    // Layout text view (middle)
-    let text_view_frame = NSRect {
-        origin: NSPoint { x: 0.0, y: status_bar_height },
-        size: NSSize { width: content_width, height: text_view_height },
-    };
-    layout_view_at_index(subviews, 1, text_view_frame);
+    // Get stored references
+    unsafe {
+        if let Some((toolbar, text_view, status_bar)) = UI_ELEMENTS {
+            // Layout toolbar (top)
+            let toolbar_frame = NSRect {
+                origin: NSPoint { x: 0.0, y: content_height - toolbar_height },
+                size: NSSize { width: content_width, height: toolbar_height },
+            };
+            set_view_frame(toolbar, toolbar_frame);
+            
+            // Layout status bar (bottom)
+            let status_bar_frame = NSRect {
+                origin: NSPoint { x: 0.0, y: 0.0 },
+                size: NSSize { width: content_width, height: status_bar_height },
+            };
+            set_view_frame(status_bar, status_bar_frame);
+            
+            // Layout text view (middle)
+            let text_view_frame = NSRect {
+                origin: NSPoint { x: 0.0, y: status_bar_height },
+                size: NSSize { width: content_width, height: text_view_height },
+            };
+            set_view_frame(text_view, text_view_frame);
+        }
+    }
 }
 
-/// Set frame for a view at a specific index in subviews array
-fn layout_view_at_index(subviews: *mut std::ffi::c_void, index: i32, frame: NSRect) {
-    // Get the view at index
-    let view = unsafe {
-        let f: msg_send_signatures::MsgSendIdInt = std::mem::transmute(ffi::objc_msgSend as *const ());
-        f(subviews, Sel::get("objectAtIndex:").as_ptr(), index)
-    };
-    let view = ObjCObject::from_ptr(view);
-    
-    // Set its frame
+/// Set frame for a view
+fn set_view_frame(view: ObjCObject, frame: NSRect) {
     unsafe {
         let f: msg_send_signatures::MsgSendVoidRect = std::mem::transmute(ffi::objc_msgSend as *const ());
         f(view.as_ptr(), Sel::get("setFrame:").as_ptr(), frame);
