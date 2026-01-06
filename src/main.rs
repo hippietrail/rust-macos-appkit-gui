@@ -262,9 +262,8 @@ fn apply_random_underlines(text_view: &ObjCObject) {
             eprintln!("Applied highlighting to {} words", applied_count);
             
             // Force the text view to redraw by notifying it of the attribute change
-            // Send setNeedsDisplay: to mark the view as needing redraw
-            msg_send_void_id(text_view.as_ptr(), Sel::get("setNeedsDisplay:").as_ptr(), 
-                            std::ptr::null_mut() as *mut std::ffi::c_void);
+            // Send setNeedsDisplay:YES to mark the view as needing redraw
+            msg_send_void_bool(text_view.as_ptr(), Sel::get("setNeedsDisplay:").as_ptr(), true);
         }
     }
 }
