@@ -74,8 +74,8 @@ fn main() {
     msg_send_void_int(shared_app.as_ptr(), Sel::get("setActivationPolicy:").as_ptr(), 0);
     
     // CRITICAL: finishLaunching must be called before creating windows
-    let f: MsgSendId = unsafe { std::mem::transmute(ffi::objc_msgSend as *const ()) };
     unsafe {
+        let f: MsgSendId = std::mem::transmute(ffi::objc_msgSend as *const ());
         f(shared_app.as_ptr(), Sel::get("finishLaunching").as_ptr());
     }
     
@@ -92,8 +92,8 @@ fn main() {
     msg_send_void_int(shared_app.as_ptr(), Sel::get("activateIgnoringOtherApps:").as_ptr(), 1);
     
     // Run the event loop (no arguments needed)
-    let f: MsgSendId = unsafe { std::mem::transmute(ffi::objc_msgSend as *const ()) };
     unsafe {
+        let f: MsgSendId = std::mem::transmute(ffi::objc_msgSend as *const ());
         f(shared_app.as_ptr(), Sel::get("run").as_ptr());
     }
 }
@@ -168,80 +168,149 @@ fn setup_window_ui(window: &ObjCObject) {
     let content_view = msg_send_id(window.as_ptr(), Sel::get("contentView").as_ptr());
     let content_view = ObjCObject::from_ptr(content_view);
     
-    // Get window frame to calculate sizes
-    let window_frame = msg_send_rect(window.as_ptr(), Sel::get("frame").as_ptr());
-    let content_height = window_frame.size.height;
-    let content_width = window_frame.size.width;
+    // Create UI elements
+    let (_toolbar, _text_view, _status_bar) = create_ui_elements(&content_view);
     
-    // Calculate toolbar height
-    let toolbar_height = 44.0;
-    let status_bar_height = 20.0;
-    let text_view_height = content_height - toolbar_height - status_bar_height;
+    // Layout the UI
+    layout_ui_elements(window);
     
-    // ========== TOOLBAR ==========
-    let toolbar_frame = NSRect {
-        origin: NSPoint { x: 0.0, y: content_height - toolbar_height },
-        size: NSSize { width: content_width, height: toolbar_height },
-    };
-    
+    // Create and set delegate that handles resize
+    let delegate = create_window_delegate_with_layout(window);
+    msg_send_void_id(window.as_ptr(), Sel::get("setDelegate:").as_ptr(), delegate.as_ptr());
+}
+
+/// Create the UI elements (toolbar, text view, status bar)
+fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, ObjCObject) {
     let ns_view_class = ObjCClass::get("NSView").expect("Failed to get NSView class");
-    let toolbar = msg_send_id(ns_view_class.as_ptr(), Sel::get("alloc").as_ptr());
-    let toolbar = msg_send_id_rect(toolbar, Sel::get("initWithFrame:").as_ptr(), toolbar_frame);
-    let toolbar = ObjCObject::from_ptr(toolbar);
-    
-    // Set toolbar background color (light gray)
     let ns_color_class = ObjCClass::get("NSColor").expect("Failed to get NSColor class");
+    
+    // Create toolbar
+    let toolbar = msg_send_id(ns_view_class.as_ptr(), Sel::get("alloc").as_ptr());
+    let toolbar = msg_send_id_rect(toolbar, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 0.0, y: 0.0 },
+        size: NSSize { width: 100.0, height: 44.0 },
+    });
+    let toolbar = ObjCObject::from_ptr(toolbar);
     let light_gray = msg_send_id(ns_color_class.as_ptr(), Sel::get("lightGrayColor").as_ptr());
     msg_send_void_id(toolbar.as_ptr(), Sel::get("setBackgroundColor:").as_ptr(), light_gray);
-    
-    // Add toolbar to window
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), toolbar.as_ptr());
     
-    // ========== TEXT VIEW ==========
-    let text_view_frame = NSRect {
-        origin: NSPoint { x: 0.0, y: status_bar_height },
-        size: NSSize { width: content_width, height: text_view_height },
-    };
-    
-    let ns_text_view_class = ObjCClass::get("NSTextView").expect("Failed to get NSTextView class");
-    let text_view = msg_send_id(ns_text_view_class.as_ptr(), Sel::get("alloc").as_ptr());
-    let text_view = msg_send_id_rect(text_view, Sel::get("initWithFrame:").as_ptr(), text_view_frame);
+    // Create text view
+    let text_view = msg_send_id(ObjCClass::get("NSTextView").unwrap().as_ptr(), Sel::get("alloc").as_ptr());
+    let text_view = msg_send_id_rect(text_view, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 0.0, y: 20.0 },
+        size: NSSize { width: 100.0, height: 100.0 },
+    });
     let text_view = ObjCObject::from_ptr(text_view);
-    
-    // Set text view to read-only and with vertical scroller
     msg_send_void_bool(text_view.as_ptr(), Sel::get("setEditable:").as_ptr(), false);
     
-    // Add some sample text
+    // Add sample text
     let sample_text = std::ffi::CString::new("Sample Text View\n\nThis is a read-only text view with vertical scrolling support.").unwrap();
-    let ns_string_class = ObjCClass::get("NSString").expect("Failed to get NSString class");
     let text_obj = {
         type MsgSendIdCStr = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *const std::ffi::c_char) -> *mut std::ffi::c_void;
         unsafe {
             let f: MsgSendIdCStr = std::mem::transmute(ffi::objc_msgSend as *const ());
-            f(ns_string_class.as_ptr(), Sel::get("stringWithUTF8String:").as_ptr(), sample_text.as_ptr())
+            f(ObjCClass::get("NSString").unwrap().as_ptr(), Sel::get("stringWithUTF8String:").as_ptr(), sample_text.as_ptr())
         }
     };
     msg_send_void_id(text_view.as_ptr(), Sel::get("setString:").as_ptr(), text_obj);
-    
-    // Add text view to window
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), text_view.as_ptr());
     
-    // ========== STATUS BAR ==========
+    // Create status bar
+    let status_bar = msg_send_id(ns_view_class.as_ptr(), Sel::get("alloc").as_ptr());
+    let status_bar = msg_send_id_rect(status_bar, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 0.0, y: 0.0 },
+        size: NSSize { width: 100.0, height: 20.0 },
+    });
+    let status_bar = ObjCObject::from_ptr(status_bar);
+    let dark_gray = msg_send_id(ns_color_class.as_ptr(), Sel::get("darkGrayColor").as_ptr());
+    msg_send_void_id(status_bar.as_ptr(), Sel::get("setBackgroundColor:").as_ptr(), dark_gray);
+    msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), status_bar.as_ptr());
+    
+    (toolbar, text_view, status_bar)
+}
+
+/// Layout UI elements based on window size
+fn layout_ui_elements(window: &ObjCObject) {
+    let window_frame = msg_send_rect(window.as_ptr(), Sel::get("frame").as_ptr());
+    let content_height = window_frame.size.height;
+    let content_width = window_frame.size.width;
+    
+    let content_view = msg_send_id(window.as_ptr(), Sel::get("contentView").as_ptr());
+    let content_view = ObjCObject::from_ptr(content_view);
+    
+    let toolbar_height = 44.0;
+    let status_bar_height = 20.0;
+    let text_view_height = content_height - toolbar_height - status_bar_height;
+    
+    // Get subviews
+    let subviews = msg_send_id(content_view.as_ptr(), Sel::get("subviews").as_ptr());
+    
+    // Layout toolbar (top)
+    let toolbar_frame = NSRect {
+        origin: NSPoint { x: 0.0, y: content_height - toolbar_height },
+        size: NSSize { width: content_width, height: toolbar_height },
+    };
+    layout_view_at_index(subviews, 0, toolbar_frame);
+    
+    // Layout status bar (bottom)
     let status_bar_frame = NSRect {
         origin: NSPoint { x: 0.0, y: 0.0 },
         size: NSSize { width: content_width, height: status_bar_height },
     };
+    layout_view_at_index(subviews, 2, status_bar_frame);
     
-    let status_bar = msg_send_id(ns_view_class.as_ptr(), Sel::get("alloc").as_ptr());
-    let status_bar = msg_send_id_rect(status_bar, Sel::get("initWithFrame:").as_ptr(), status_bar_frame);
-    let status_bar = ObjCObject::from_ptr(status_bar);
+    // Layout text view (middle)
+    let text_view_frame = NSRect {
+        origin: NSPoint { x: 0.0, y: status_bar_height },
+        size: NSSize { width: content_width, height: text_view_height },
+    };
+    layout_view_at_index(subviews, 1, text_view_frame);
+}
+
+/// Set frame for a view at a specific index in subviews array
+fn layout_view_at_index(subviews: *mut std::ffi::c_void, index: i32, frame: NSRect) {
+    // Get the view at index
+    let view = unsafe {
+        let f: msg_send_signatures::MsgSendIdInt = std::mem::transmute(ffi::objc_msgSend as *const ());
+        f(subviews, Sel::get("objectAtIndex:").as_ptr(), index)
+    };
+    let view = ObjCObject::from_ptr(view);
     
-    // Set status bar background color (light gray, slightly darker)
-    let light_gray_2 = msg_send_id(ns_color_class.as_ptr(), Sel::get("darkGrayColor").as_ptr());
-    msg_send_void_id(status_bar.as_ptr(), Sel::get("setBackgroundColor:").as_ptr(), light_gray_2);
-    
-    // Add status bar to window
-    msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), status_bar.as_ptr());
+    // Set its frame
+    unsafe {
+        let f: msg_send_signatures::MsgSendVoidRect = std::mem::transmute(ffi::objc_msgSend as *const ());
+        f(view.as_ptr(), Sel::get("setFrame:").as_ptr(), frame);
+    }
+}
+
+/// Create a window delegate that handles resize events
+fn create_window_delegate_with_layout(window: &ObjCObject) -> ObjCObject {
+    unsafe {
+        // Create delegate class dynamically
+        let ns_object = ObjCClass::get("NSObject").unwrap();
+        let class_name = std::ffi::CString::new("WindowDelegate").unwrap();
+        
+        let delegate_class = ffi::objc_allocateClassPair(ns_object.as_ptr(), class_name.as_ptr(), 0);
+        
+        // Add windowShouldClose: method
+        let _method_name = std::ffi::CString::new("windowShouldClose:").unwrap();
+        let method_types = std::ffi::CString::new("I@:@").unwrap();
+        let imp = window_should_close as *mut std::ffi::c_void;
+        ffi::class_addMethod(delegate_class, Sel::get("windowShouldClose:").as_ptr(), imp, method_types.as_ptr());
+        
+        // Add windowDidResize: method
+        let method_types_resize = std::ffi::CString::new("v@:@").unwrap(); // v=void, @=id, :=SEL, @=id
+        let imp_resize = window_did_resize as *mut std::ffi::c_void;
+        ffi::class_addMethod(delegate_class, Sel::get("windowDidResize:").as_ptr(), imp_resize, method_types_resize.as_ptr());
+        
+        ffi::objc_registerClassPair(delegate_class);
+        
+        // Create instance
+        let alloc = msg_send_id(delegate_class as *mut std::ffi::c_void, Sel::get("alloc").as_ptr());
+        let delegate = msg_send_id(alloc, Sel::get("init").as_ptr());
+        ObjCObject::from_ptr(delegate)
+    }
 }
 
 /// Callback for windowShouldClose: - called when window close button is clicked
@@ -252,4 +321,18 @@ extern "C" fn window_should_close(_self: *mut std::ffi::c_void, _sel: *mut std::
         msg_send_void_id(app, Sel::get("terminate:").as_ptr(), std::ptr::null_mut());
     }
     1 // Return YES
+}
+
+/// Callback for windowDidResize: - called when window is resized
+extern "C" fn window_did_resize(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void, _notification: *mut std::ffi::c_void) {
+    unsafe {
+        // Get the window from the notification
+        let window = {
+            type MsgSendId = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            let f: MsgSendId = std::mem::transmute(ffi::objc_msgSend as *const ());
+            f(_notification, Sel::get("object").as_ptr())
+        };
+        let window = ObjCObject::from_ptr(window);
+        layout_ui_elements(&window);
+    }
 }
