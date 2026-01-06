@@ -63,7 +63,10 @@ fn main() {
     }
     
     // Create the window
-    let _window = create_window();
+    let window = create_window();
+    
+    // Show the window
+    msg_send_void_id(window.as_ptr(), Sel::get("makeKeyAndOrderFront:").as_ptr(), std::ptr::null_mut());
     
     // Activate the app
     msg_send_void_int(shared_app.as_ptr(), Sel::get("activateIgnoringOtherApps:").as_ptr(), 1);
@@ -86,28 +89,16 @@ fn create_window() -> ObjCObject {
     let ns_window_class = ObjCClass::get("NSWindow")
         .expect("Failed to get NSWindow class");
     
-    eprintln!("Got NSWindow class");
-    
     let alloc_window = msg_send_id(ns_window_class.as_ptr(), Sel::get("alloc").as_ptr());
     
-    eprintln!("Called alloc");
-    
-    if alloc_window.is_null() {
-        panic!("alloc returned nil");
-    }
-    
-    // Call initWithContentRect:styleMask:backing:defer: with proper type casting
-    eprintln!("Calling init with contentRect");
     let window = msg_send_id_rect_int_int_int(
         alloc_window,
         Sel::get("initWithContentRect:styleMask:backing:defer:").as_ptr(),
         frame,
-        15,  // styleMask
-        2,   // backing
-        0,   // defer
+        15,  // styleMask: Titled | Closable | Miniaturizable | Resizable
+        2,   // backing: Buffered
+        0,   // defer: NO
     );
-    
-    eprintln!("Init returned: {:p}", window);
     
     ObjCObject::from_ptr(window)
 }
