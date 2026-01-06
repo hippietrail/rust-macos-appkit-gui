@@ -1236,30 +1236,39 @@ extern "C" fn window_did_resize(_self: *mut std::ffi::c_void, _sel: *mut std::ff
     }
 }
 
-/// Callback for magnification gesture (pinch zoom) 
+/// Callback for magnification gesture (pinch zoom)
+/// Must be careful with panics since this crosses the FFI boundary
 extern "C" fn magnify_with_event(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void, event: *mut std::ffi::c_void) {
-    unsafe {
-        let event = ObjCObject::from_ptr(event);
-        
-        // Get magnification value from event
-        type MsgSendDouble = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> f64;
-        let f_mag: MsgSendDouble = std::mem::transmute(ffi::objc_msgSend as *const ());
-        let magnification = f_mag(event.as_ptr(), Sel::get("magnification").as_ptr());
-        
-        // Get the gesture state to only apply zoom at end of gesture
-        type MsgSendInt = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i64;
-        let f_state: MsgSendInt = std::mem::transmute(ffi::objc_msgSend as *const ());
-        let state = f_state(event.as_ptr(), Sel::get("phase").as_ptr());
-        
-        // Update font size based on magnification
-        let new_size = TEXT_VIEW_FONT_SIZE * (1.0 + magnification);
-        TEXT_VIEW_FONT_SIZE = if new_size < 8.0 { 8.0 } else if new_size > 48.0 { 48.0 } else { new_size };
-        
-        // Apply the new size to the text view
-        if let Some(text_view) = TEXT_VIEW {
-            set_text_view_font_size(&text_view, TEXT_VIEW_FONT_SIZE);
+    // Wrap entire callback in catch_unwind to prevent unwinding across FFI
+    let _ = std::panic::catch_unwind(|| {
+        unsafe {
+            if event.is_null() {
+                return;
+            }
+            
+            let event = ObjCObject::from_ptr(event);
+            
+            // Get magnification value from event
+            let magnification = {
+                type MsgSendDouble = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> f64;
+                let f_mag: MsgSendDouble = std::mem::transmute(ffi::objc_msgSend as *const ());
+                let sel = Sel::get("magnification");
+                if sel.is_null() {
+                    return;
+                }
+                f_mag(event.as_ptr(), sel.as_ptr())
+            };
+            
+            // Update font size based on magnification
+            let new_size = TEXT_VIEW_FONT_SIZE * (1.0 + magnification);
+            TEXT_VIEW_FONT_SIZE = if new_size < 8.0 { 8.0 } else if new_size > 48.0 { 48.0 } else { new_size };
+            
+            // Apply the new size to the text view
+            if let Some(text_view) = TEXT_VIEW {
+                set_text_view_font_size(&text_view, TEXT_VIEW_FONT_SIZE);
+            }
         }
-    }
+    });
 }
 
 /// Setup gesture recognizers for the text view (pinch zoom, etc.)

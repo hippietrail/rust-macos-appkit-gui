@@ -173,6 +173,11 @@ impl Sel {
     pub fn as_ptr(&self) -> *mut c_void {
         self.0
     }
+    
+    /// Check if the selector is null (failed to load)
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
 }
 
 impl ObjCObject {
