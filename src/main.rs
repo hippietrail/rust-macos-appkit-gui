@@ -142,6 +142,9 @@ fn main() {
         f(shared_app.as_ptr(), Sel::get("finishLaunching").as_ptr());
     }
     
+    // Activate the app immediately after finishLaunching so menu appears
+    msg_send_void_int(shared_app.as_ptr(), Sel::get("activateIgnoringOtherApps:").as_ptr(), 1);
+    
     // Create the window
     let window = create_window();
     
@@ -153,9 +156,6 @@ fn main() {
     
     // Now layout the UI after window is shown (so bounds are correct)
     layout_ui_elements(&window);
-    
-    // Activate the app
-    msg_send_void_int(shared_app.as_ptr(), Sel::get("activateIgnoringOtherApps:").as_ptr(), 1);
     
     // Run the event loop (no arguments needed)
     unsafe {
