@@ -65,12 +65,13 @@ fn msg_send_void_bool(obj: *mut std::ffi::c_void, sel: *mut std::ffi::c_void, ar
 
 /// Setup the application menu with Quit option
 fn setup_menu(app: &ObjCObject) {
+    let ns_menu_class = ObjCClass::get("NSMenu").expect("Failed to get NSMenu class");
+    let ns_menu_item_class = ObjCClass::get("NSMenuItem").expect("Failed to get NSMenuItem class");
+    let ns_string_class = ObjCClass::get("NSString").expect("Failed to get NSString class");
+    
     // Get or create main menu
     let main_menu = msg_send_id(app.as_ptr(), Sel::get("mainMenu").as_ptr());
-    
     let main_menu = if main_menu.is_null() {
-        // Create main menu if it doesn't exist
-        let ns_menu_class = ObjCClass::get("NSMenu").expect("Failed to get NSMenu class");
         let menu = msg_send_id(ns_menu_class.as_ptr(), Sel::get("alloc").as_ptr());
         let menu = msg_send_id(menu, Sel::get("init").as_ptr());
         msg_send_void_id(app.as_ptr(), Sel::get("setMainMenu:").as_ptr(), menu);
@@ -78,10 +79,9 @@ fn setup_menu(app: &ObjCObject) {
     } else {
         main_menu
     };
-    
     let main_menu = ObjCObject::from_ptr(main_menu);
     
-    // Get app menu (first menu item's submenu)
+    // Get or create app menu submenu
     let menu_items = msg_send_id(main_menu.as_ptr(), Sel::get("itemArray").as_ptr());
     let app_menu_item = {
         type MsgSendIdInt = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i32) -> *mut std::ffi::c_void;
@@ -91,45 +91,56 @@ fn setup_menu(app: &ObjCObject) {
         }
     };
     
-    if !app_menu_item.is_null() {
+    let app_submenu = if app_menu_item.is_null() {
+        // Create app menu item with submenu
+        let app_menu_item = msg_send_id(ns_menu_item_class.as_ptr(), Sel::get("alloc").as_ptr());
+        let app_submenu = msg_send_id(ns_menu_class.as_ptr(), Sel::get("alloc").as_ptr());
+        let app_submenu = msg_send_id(app_submenu, Sel::get("init").as_ptr());
+        
+        msg_send_void_id(app_menu_item, Sel::get("setSubmenu:").as_ptr(), app_submenu);
+        msg_send_void_id(main_menu.as_ptr(), Sel::get("insertItem:atIndex:").as_ptr(), app_menu_item);
+        
+        app_submenu
+    } else {
         let app_menu_item = ObjCObject::from_ptr(app_menu_item);
         let app_submenu = msg_send_id(app_menu_item.as_ptr(), Sel::get("submenu").as_ptr());
-        
-        if !app_submenu.is_null() {
-            let app_submenu = ObjCObject::from_ptr(app_submenu);
-            
-            // Add Quit menu item
-            let quit_title = std::ffi::CString::new("Quit rust_macos_gui").unwrap();
-            let ns_string_class = ObjCClass::get("NSString").expect("Failed to get NSString class");
-            let quit_title_obj = {
-                let f: msg_send_signatures::MsgSendIdCStr = unsafe { 
-                    std::mem::transmute(ffi::objc_msgSend as *const ())
-                };
-                f(ns_string_class.as_ptr(), Sel::get("stringWithUTF8String:").as_ptr(), quit_title.as_ptr())
-            };
-            
-            // Create quit menu item
-            let ns_menu_item_class = ObjCClass::get("NSMenuItem").expect("Failed to get NSMenuItem class");
-            let quit_item = msg_send_id(ns_menu_item_class.as_ptr(), Sel::get("alloc").as_ptr());
-            
-            // initWithTitle:action:keyEquivalent:
-            type MsgSendIdIdIdId = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-            let quit_item = unsafe {
-                let q_key = std::ffi::CString::new("q").unwrap();
-                let q_str = {
-                    let f: msg_send_signatures::MsgSendIdCStr = std::mem::transmute(ffi::objc_msgSend as *const ());
-                    f(ns_string_class.as_ptr(), Sel::get("stringWithUTF8String:").as_ptr(), q_key.as_ptr())
-                };
-                let f: MsgSendIdIdIdId = std::mem::transmute(ffi::objc_msgSend as *const ());
-                f(quit_item, Sel::get("initWithTitle:action:keyEquivalent:").as_ptr(), quit_title_obj, Sel::get("terminate:").as_ptr(), q_str)
-            };
-            
-            let quit_item = ObjCObject::from_ptr(quit_item);
-            
-            // Add to menu
-            msg_send_void_id(app_submenu.as_ptr(), Sel::get("addItem:").as_ptr(), quit_item.as_ptr());
+        if app_submenu.is_null() {
+            let new_submenu = msg_send_id(ns_menu_class.as_ptr(), Sel::get("alloc").as_ptr());
+            let new_submenu = msg_send_id(new_submenu, Sel::get("init").as_ptr());
+            msg_send_void_id(app_menu_item.as_ptr(), Sel::get("setSubmenu:").as_ptr(), new_submenu);
+            new_submenu
+        } else {
+            app_submenu
         }
-    }
+    };
+    
+    let app_submenu = ObjCObject::from_ptr(app_submenu);
+    
+    // Create and add Quit menu item
+    let quit_title = std::ffi::CString::new("Quit rust_macos_gui").unwrap();
+    let quit_title_obj = {
+        let f: msg_send_signatures::MsgSendIdCStr = unsafe { 
+            std::mem::transmute(ffi::objc_msgSend as *const ())
+        };
+        f(ns_string_class.as_ptr(), Sel::get("stringWithUTF8String:").as_ptr(), quit_title.as_ptr())
+    };
+    
+    let quit_item = msg_send_id(ns_menu_item_class.as_ptr(), Sel::get("alloc").as_ptr());
+    
+    // initWithTitle:action:keyEquivalent:
+    type MsgSendIdIdIdId = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    let quit_item = unsafe {
+        let q_key = std::ffi::CString::new("q").unwrap();
+        let q_str = {
+            let f: msg_send_signatures::MsgSendIdCStr = std::mem::transmute(ffi::objc_msgSend as *const ());
+            f(ns_string_class.as_ptr(), Sel::get("stringWithUTF8String:").as_ptr(), q_key.as_ptr())
+        };
+        let f: MsgSendIdIdIdId = std::mem::transmute(ffi::objc_msgSend as *const ());
+        f(quit_item, Sel::get("initWithTitle:action:keyEquivalent:").as_ptr(), quit_title_obj, Sel::get("terminate:").as_ptr(), q_str)
+    };
+    
+    let quit_item = ObjCObject::from_ptr(quit_item);
+    msg_send_void_id(app_submenu.as_ptr(), Sel::get("addItem:").as_ptr(), quit_item.as_ptr());
 }
 
 fn main() {
