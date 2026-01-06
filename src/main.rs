@@ -129,37 +129,7 @@ fn create_window() -> ObjCObject {
     );
     
     let window = ObjCObject::from_ptr(window);
-    
-    // Create and set delegate to handle close button
-    let delegate = create_window_delegate();
-    msg_send_void_id(window.as_ptr(), Sel::get("setDelegate:").as_ptr(), delegate.as_ptr());
-    
     window
-}
-
-/// Create a window delegate that quits the app when window closes
-fn create_window_delegate() -> ObjCObject {
-    unsafe {
-        // Create delegate class dynamically
-        let ns_object = ObjCClass::get("NSObject").unwrap();
-        let class_name = std::ffi::CString::new("WindowDelegate").unwrap();
-        
-        let delegate_class = ffi::objc_allocateClassPair(ns_object.as_ptr(), class_name.as_ptr(), 0);
-        
-        // Add windowShouldClose: method
-        let _method_name = std::ffi::CString::new("windowShouldClose:").unwrap();
-        let method_types = std::ffi::CString::new("I@:@").unwrap(); // I=unsigned int, @=id, :=SEL
-        
-        let imp = window_should_close as *mut std::ffi::c_void;
-        ffi::class_addMethod(delegate_class, Sel::get("windowShouldClose:").as_ptr(), imp, method_types.as_ptr());
-        
-        ffi::objc_registerClassPair(delegate_class);
-        
-        // Create instance
-        let alloc = msg_send_id(delegate_class as *mut std::ffi::c_void, Sel::get("alloc").as_ptr());
-        let delegate = msg_send_id(alloc, Sel::get("init").as_ptr());
-        ObjCObject::from_ptr(delegate)
-    }
 }
 
 /// Setup toolbar, text view, and status bar for the window
@@ -287,24 +257,35 @@ fn layout_view_at_index(subviews: *mut std::ffi::c_void, index: i32, frame: NSRe
 /// Create a window delegate that handles resize events
 fn create_window_delegate_with_layout(window: &ObjCObject) -> ObjCObject {
     unsafe {
-        // Create delegate class dynamically
-        let ns_object = ObjCClass::get("NSObject").unwrap();
+        // Try to get existing class first
         let class_name = std::ffi::CString::new("WindowDelegate").unwrap();
+        let existing_class = ffi::objc_getClass(class_name.as_ptr());
         
-        let delegate_class = ffi::objc_allocateClassPair(ns_object.as_ptr(), class_name.as_ptr(), 0);
-        
-        // Add windowShouldClose: method
-        let _method_name = std::ffi::CString::new("windowShouldClose:").unwrap();
-        let method_types = std::ffi::CString::new("I@:@").unwrap();
-        let imp = window_should_close as *mut std::ffi::c_void;
-        ffi::class_addMethod(delegate_class, Sel::get("windowShouldClose:").as_ptr(), imp, method_types.as_ptr());
-        
-        // Add windowDidResize: method
-        let method_types_resize = std::ffi::CString::new("v@:@").unwrap(); // v=void, @=id, :=SEL, @=id
-        let imp_resize = window_did_resize as *mut std::ffi::c_void;
-        ffi::class_addMethod(delegate_class, Sel::get("windowDidResize:").as_ptr(), imp_resize, method_types_resize.as_ptr());
-        
-        ffi::objc_registerClassPair(delegate_class);
+        let delegate_class = if !existing_class.is_null() {
+            // Class already exists, reuse it
+            existing_class
+        } else {
+            // Create delegate class dynamically
+            let ns_object = ObjCClass::get("NSObject").unwrap();
+            let delegate_class = ffi::objc_allocateClassPair(ns_object.as_ptr(), class_name.as_ptr(), 0);
+            
+            if delegate_class.is_null() {
+                panic!("Failed to allocate WindowDelegate class pair");
+            }
+            
+            // Add windowShouldClose: method
+            let method_types = std::ffi::CString::new("I@:@").unwrap();
+            let imp = window_should_close as *mut std::ffi::c_void;
+            ffi::class_addMethod(delegate_class, Sel::get("windowShouldClose:").as_ptr(), imp, method_types.as_ptr());
+            
+            // Add windowDidResize: method
+            let method_types_resize = std::ffi::CString::new("v@:@").unwrap();
+            let imp_resize = window_did_resize as *mut std::ffi::c_void;
+            ffi::class_addMethod(delegate_class, Sel::get("windowDidResize:").as_ptr(), imp_resize, method_types_resize.as_ptr());
+            
+            ffi::objc_registerClassPair(delegate_class);
+            delegate_class
+        };
         
         // Create instance
         let alloc = msg_send_id(delegate_class as *mut std::ffi::c_void, Sel::get("alloc").as_ptr());
