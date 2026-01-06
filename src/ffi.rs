@@ -118,6 +118,9 @@ pub mod msg_send_signatures {
     
     /// id objc_msgSend(id obj, SEL sel, const char* cString)
     pub type MsgSendIdCStr = extern "C" fn(*mut c_void, *mut c_void, *const c_char) -> *mut c_void;
+    
+    /// id objc_msgSend(id obj, SEL sel, id arg)
+    pub type MsgSendIdId = extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
 }
 
 impl ObjCClass {
@@ -141,7 +144,13 @@ impl ObjCClass {
 impl Sel {
     /// Get a selector by name (e.g., "alloc")
     pub fn get(name: &str) -> Self {
-        let c_name = std::ffi::CString::new(name).unwrap();
+        let c_name = match std::ffi::CString::new(name) {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("Invalid selector name: {}", name);
+                return Sel(std::ptr::null_mut());
+            }
+        };
         let ptr = unsafe { sel_getUid(c_name.as_ptr()) };
         Sel(ptr)
     }
