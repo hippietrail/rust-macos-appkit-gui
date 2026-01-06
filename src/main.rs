@@ -47,6 +47,18 @@ fn msg_send_id_rect_int_int_int(
     }
 }
 
+/// Get screen frame (NSRect)
+fn msg_send_rect(obj: *mut std::ffi::c_void, sel: *mut std::ffi::c_void) -> NSRect {
+    unsafe {
+        extern "C" {
+            fn objc_msgSend() -> NSRect;
+        }
+        let f: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> NSRect = 
+            std::mem::transmute(ffi::objc_msgSend as *const ());
+        f(obj, sel)
+    }
+}
+
 fn main() {
     let ns_app_class = ObjCClass::get("NSApplication")
         .expect("Failed to get NSApplication class");
@@ -84,9 +96,19 @@ fn main() {
 }
 
 fn create_window() -> ObjCObject {
+    // Get main screen and its frame
+    let ns_screen_class = ObjCClass::get("NSScreen")
+        .expect("Failed to get NSScreen class");
+    let main_screen = msg_send_id(ns_screen_class.as_ptr(), Sel::get("mainScreen").as_ptr());
+    let screen_frame = msg_send_rect(main_screen, Sel::get("frame").as_ptr());
+    
+    // Calculate window size as 3/4 of screen
     let frame = NSRect {
-        origin: NSPoint { x: 100.0, y: 100.0 },
-        size: NSSize { width: 320.0, height: 420.0 },
+        origin: NSPoint { x: screen_frame.size.width * 0.125, y: screen_frame.size.height * 0.125 },
+        size: NSSize {
+            width: screen_frame.size.width * 0.75,
+            height: screen_frame.size.height * 0.75,
+        },
     };
     
     let ns_window_class = ObjCClass::get("NSWindow")
@@ -103,5 +125,46 @@ fn create_window() -> ObjCObject {
         0,   // defer: NO
     );
     
-    ObjCObject::from_ptr(window)
+    let window = ObjCObject::from_ptr(window);
+    
+    // Create and set delegate to handle close button
+    let delegate = create_window_delegate();
+    msg_send_void_id(window.as_ptr(), Sel::get("setDelegate:").as_ptr(), delegate.as_ptr());
+    
+    window
+}
+
+/// Create a window delegate that quits the app when window closes
+fn create_window_delegate() -> ObjCObject {
+    unsafe {
+        // Create delegate class dynamically
+        let ns_object = ObjCClass::get("NSObject").unwrap();
+        let class_name = std::ffi::CString::new("WindowDelegate").unwrap();
+        
+        let delegate_class = ffi::objc_allocateClassPair(ns_object.as_ptr(), class_name.as_ptr(), 0);
+        
+        // Add windowShouldClose: method
+        let method_name = std::ffi::CString::new("windowShouldClose:").unwrap();
+        let method_types = std::ffi::CString::new("I@:@").unwrap(); // I=unsigned int, @=id, :=SEL
+        
+        let imp = window_should_close as *mut std::ffi::c_void;
+        ffi::class_addMethod(delegate_class, Sel::get("windowShouldClose:").as_ptr(), imp, method_types.as_ptr());
+        
+        ffi::objc_registerClassPair(delegate_class);
+        
+        // Create instance
+        let alloc = msg_send_id(delegate_class as *mut std::ffi::c_void, Sel::get("alloc").as_ptr());
+        let delegate = msg_send_id(alloc, Sel::get("init").as_ptr());
+        ObjCObject::from_ptr(delegate)
+    }
+}
+
+/// Callback for windowShouldClose: - called when window close button is clicked
+extern "C" fn window_should_close(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void, _sender: *mut std::ffi::c_void) -> u32 {
+    unsafe {
+        let app_class = ObjCClass::get("NSApplication").unwrap();
+        let app = msg_send_id(app_class.as_ptr(), Sel::get("sharedApplication").as_ptr());
+        msg_send_void_id(app, Sel::get("terminate:").as_ptr(), std::ptr::null_mut());
+    }
+    1 // Return YES
 }

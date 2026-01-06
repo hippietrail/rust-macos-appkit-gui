@@ -42,8 +42,23 @@ extern "C" {
     #[link_name = "objc_msgSend"]
     pub fn objc_msgSend(obj: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
     
+    /// Allocate a new class pair
+    pub fn objc_allocateClassPair(
+        superclass: *mut c_void,
+        name: *const c_char,
+        extraBytes: usize,
+    ) -> *mut c_void;
+    
     /// Register a newly created class
     pub fn objc_registerClassPair(cls: *mut c_void);
+    
+    /// Add a method to a class
+    pub fn class_addMethod(
+        cls: *mut c_void,
+        name: *mut c_void,
+        imp: *mut c_void,
+        types: *const c_char,
+    ) -> bool;
 }
 
 /// Represents an NSRect/CGRect structure  
