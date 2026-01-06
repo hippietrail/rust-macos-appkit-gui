@@ -106,6 +106,9 @@ pub mod msg_send_signatures {
     
     /// id objc_msgSend(id obj, SEL sel, NSRect frame, int styleMask, int backing, int defer)
     pub type MsgSendIdRectIntIntInt = extern "C" fn(*mut c_void, *mut c_void, NSRect, i32, i32, i32) -> *mut c_void;
+    
+    /// void objc_msgSend(id obj, SEL sel, bool arg)
+    pub type MsgSendVoidBool = extern "C" fn(*mut c_void, *mut c_void, bool);
 }
 
 impl ObjCClass {
