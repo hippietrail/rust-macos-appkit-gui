@@ -170,16 +170,16 @@ fn apply_random_underlines(text_view: &ObjCObject) {
         let text = std::ffi::CStr::from_ptr(text_cstr).to_string_lossy();
         
         // Build a UTF-8 byte position to UTF-16 character position mapping
-        let mut utf8_to_utf16: Vec<usize> = Vec::new();
+        // Only iterate through valid char boundaries to avoid panicking on multi-byte chars
+        let mut utf8_to_utf16: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         let mut utf16_pos = 0;
-        for byte_pos in 0..=text.len() {
-            utf8_to_utf16.push(utf16_pos);
-            if byte_pos < text.len() {
-                // Count UTF-16 code units for this character
-                if let Some(ch) = text[byte_pos..].chars().next() {
-                    utf16_pos += ch.encode_utf16(&mut [0; 2]).len();
-                }
-            }
+        utf8_to_utf16.insert(0, 0);
+        
+        for (byte_pos, ch) in text.char_indices() {
+            utf16_pos += ch.encode_utf16(&mut [0; 2]).len();
+            // Map the position AFTER this character
+            let next_pos = byte_pos + ch.len_utf8();
+            utf8_to_utf16.insert(next_pos, utf16_pos);
         }
         
         // Find word boundaries (in UTF-8 byte positions)
@@ -216,16 +216,14 @@ fn apply_random_underlines(text_view: &ObjCObject) {
         for (idx, (start_byte, end_byte)) in words.iter().enumerate() {
             if idx % 5 == 2 {
                 // Convert UTF-8 byte positions to UTF-16 character positions
-                let start_utf16 = if *start_byte < utf8_to_utf16.len() {
-                    utf8_to_utf16[*start_byte]
-                } else {
-                    continue; // Skip if out of bounds
+                let start_utf16 = match utf8_to_utf16.get(start_byte) {
+                    Some(&pos) => pos,
+                    None => continue, // Skip if byte position not found
                 };
                 
-                let end_utf16 = if *end_byte < utf8_to_utf16.len() {
-                    utf8_to_utf16[*end_byte]
-                } else {
-                    utf16_len // Use full length if we're at the end
+                let end_utf16 = match utf8_to_utf16.get(end_byte) {
+                    Some(&pos) => pos,
+                    None => utf16_len, // Use full length if we're at the end
                 };
                 
                 let word_len = if end_utf16 > start_utf16 {
