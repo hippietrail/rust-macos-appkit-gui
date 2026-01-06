@@ -82,11 +82,14 @@ fn main() {
     // Create the window
     let window = create_window();
     
-    // Add UI elements to the window
+    // Add UI elements to the window (this creates the views but doesn't layout yet)
     setup_window_ui(&window);
     
     // Show the window
     msg_send_void_id(window.as_ptr(), Sel::get("makeKeyAndOrderFront:").as_ptr(), std::ptr::null_mut());
+    
+    // Now layout the UI after window is shown (so bounds are correct)
+    layout_ui_elements(&window);
     
     // Activate the app
     msg_send_void_int(shared_app.as_ptr(), Sel::get("activateIgnoringOtherApps:").as_ptr(), 1);
@@ -138,11 +141,8 @@ fn setup_window_ui(window: &ObjCObject) {
     let content_view = msg_send_id(window.as_ptr(), Sel::get("contentView").as_ptr());
     let content_view = ObjCObject::from_ptr(content_view);
     
-    // Create UI elements
+    // Create UI elements (they'll be laid out later in main() after window is shown)
     let (_toolbar, _text_view, _status_bar) = create_ui_elements(&content_view);
-    
-    // Layout the UI
-    layout_ui_elements(window);
     
     // Create and set delegate that handles resize
     let delegate = create_window_delegate_with_layout(window);
