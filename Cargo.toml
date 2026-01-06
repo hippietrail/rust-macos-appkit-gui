@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 harper-core = "1.3.0"
+ureq = "2.9"

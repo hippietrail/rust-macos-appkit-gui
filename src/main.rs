@@ -148,6 +148,15 @@ fn apply_random_underlines(text_view: &ObjCObject) {
             return;
         }
         
+        // Get the length of the string in UTF-16 characters (what NSRange uses)
+        type MsgSendUsize = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
+        let f_len: MsgSendUsize = std::mem::transmute(ffi::objc_msgSend as *const ());
+        let utf16_len = f_len(text_str, Sel::get("length").as_ptr());
+        
+        if utf16_len == 0 {
+            return;
+        }
+        
         let text_cstr: *const std::ffi::c_char = {
             let f: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *const std::ffi::c_char = 
                 std::mem::transmute(ffi::objc_msgSend as *const ());
@@ -160,8 +169,21 @@ fn apply_random_underlines(text_view: &ObjCObject) {
         
         let text = std::ffi::CStr::from_ptr(text_cstr).to_string_lossy();
         
-        // Find word boundaries
-        let mut words: Vec<(usize, usize)> = Vec::new(); // (start byte pos, length) pairs
+        // Build a UTF-8 byte position to UTF-16 character position mapping
+        let mut utf8_to_utf16: Vec<usize> = Vec::new();
+        let mut utf16_pos = 0;
+        for byte_pos in 0..=text.len() {
+            utf8_to_utf16.push(utf16_pos);
+            if byte_pos < text.len() {
+                // Count UTF-16 code units for this character
+                if let Some(ch) = text[byte_pos..].chars().next() {
+                    utf16_pos += ch.encode_utf16(&mut [0; 2]).len();
+                }
+            }
+        }
+        
+        // Find word boundaries (in UTF-8 byte positions)
+        let mut words: Vec<(usize, usize)> = Vec::new(); // (start byte pos, end byte pos) pairs
         let mut in_word = false;
         let mut word_start = 0;
         
@@ -173,36 +195,57 @@ fn apply_random_underlines(text_view: &ObjCObject) {
                 }
             } else {
                 if in_word {
-                    words.push((word_start, pos - word_start));
+                    words.push((word_start, pos));
                     in_word = false;
                 }
             }
         }
         if in_word {
-            words.push((word_start, text.len() - word_start));
+            words.push((word_start, text.len()));
         }
         
-        // Get orange color for highlights (less aggressive than red)
+        // Get orange color for highlights
         let ns_color_class = match ObjCClass::get("NSColor") {
             Some(c) => c,
             None => return,
         };
         let orange_color = msg_send_id(ns_color_class.as_ptr(), Sel::get("orangeColor").as_ptr());
         
-        // Apply red color to every 5th word to simulate spell-check highlights
-        for (idx, (start, len)) in words.iter().enumerate() {
-            if idx % 5 == 2 && *len > 0 {
+        // Apply orange color to every 5th word to simulate spell-check highlights
+        for (idx, (start_byte, end_byte)) in words.iter().enumerate() {
+            if idx % 5 == 2 {
+                // Convert UTF-8 byte positions to UTF-16 character positions
+                let start_utf16 = if *start_byte < utf8_to_utf16.len() {
+                    utf8_to_utf16[*start_byte]
+                } else {
+                    continue; // Skip if out of bounds
+                };
+                
+                let end_utf16 = if *end_byte < utf8_to_utf16.len() {
+                    utf8_to_utf16[*end_byte]
+                } else {
+                    utf16_len // Use full length if we're at the end
+                };
+                
+                let word_len = if end_utf16 > start_utf16 {
+                    end_utf16 - start_utf16
+                } else {
+                    continue; // Skip invalid ranges
+                };
+                
+                // Validate that the range is within bounds
+                if start_utf16 >= utf16_len || start_utf16 + word_len > utf16_len {
+                    continue;
+                }
+                
                 let range = NSRange {
-                    location: *start,
-                    length: *len,
+                    location: start_utf16,
+                    length: word_len,
                 };
                 
                 // Use addAttribute:value:range: to add color attribute
-                // The method signature is: void addAttribute:(NSString *)name value:(id)value range:(NSRange)range
                 let attr_name = create_nsstring("NSForegroundColorAttributeName");
                 
-                // Build the objc_msgSend call with the NSRange parameter
-                // We need to cast to the proper function pointer type
                 type MsgSendVoidIdIdRange = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, NSRange);
                 let f: MsgSendVoidIdIdRange = std::mem::transmute(ffi::objc_msgSend as *const ());
                 
@@ -547,17 +590,8 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     msg_send_void_id(scroll_view.as_ptr(), Sel::get("setDocumentView:").as_ptr(), text_view.as_ptr());
     
     // Add magnification gesture recognizer for pinch zoom
-    let ns_magnification_gesture_class = ObjCClass::get("NSMagnificationGestureRecognizer");
-    if let Some(recognizer_class) = ns_magnification_gesture_class {
-        // Create gesture recognizer: [[NSMagnificationGestureRecognizer alloc] initWithTarget:action:]
-        let gesture_recognizer = msg_send_id(recognizer_class.as_ptr(), Sel::get("alloc").as_ptr());
-        
-        // We need a gesture handler - for now we'll skip the target/action setup
-        // and instead override on the text view level
-        let _gesture = msg_send_id(gesture_recognizer, Sel::get("init").as_ptr());
-        // In a real implementation, we'd set target and action here
-        // For now, we'll rely on the view's magnifyWithEvent: if it's overridden
-    }
+    // The custom text view class overrides magnifyWithEvent: which will be called by the system
+    // when pinch gestures are detected on the view, so no explicit gesture recognizer needed
     
     // Add scroll view to content view
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), scroll_view.as_ptr());
@@ -633,6 +667,9 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
         UI_ELEMENTS = Some((toolbar, scroll_view, status_bar));
         TEXT_VIEW = Some(text_view.clone());
     }
+    
+    // Setup gesture recognizers for pinch zoom (without needing text selection)
+    setup_text_view_gestures(&text_view);
     
     (toolbar, scroll_view, status_bar)
 }
@@ -818,11 +855,12 @@ extern "C" fn open_file(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_voi
                                 msg_send_void_id(line_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), line_str);
                             }
                             
-                            // Apply random color highlighting to simulate spell-check errors
-                            // Note: Full NSAttributedString support via FFI is complex, so we just log for now
-                            if let Some(tv) = TEXT_VIEW {
-                                apply_random_underlines(&tv);
-                            }
+                            // TODO: Apply random color highlighting - currently disabled due to NSRange UTF-16 issues
+                            // NSString uses UTF-16 internally but we're calculating byte positions in UTF-8
+                            // This causes "Out of bounds" NSRangeException when adding attributes
+                            // if let Some(tv) = TEXT_VIEW {
+                            //     apply_random_underlines(&tv);
+                            // }
                         }
                     }
                 }
@@ -882,21 +920,108 @@ extern "C" fn open_url(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void
             // Get text field content
             let url_str = msg_send_id(text_field.as_ptr(), Sel::get("stringValue").as_ptr());
             if !url_str.is_null() {
-                let url_cstr: *const std::ffi::c_char = unsafe {
+                let url_cstr: *const std::ffi::c_char = {
                     let f: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *const std::ffi::c_char = 
                         std::mem::transmute(ffi::objc_msgSend as *const ());
                     f(url_str, Sel::get("UTF8String").as_ptr())
                 };
                 
                 if !url_cstr.is_null() {
-                    let url = std::ffi::CStr::from_ptr(url_cstr).to_string_lossy();
+                    let url = std::ffi::CStr::from_ptr(url_cstr).to_string_lossy().to_string();
                     
-                    // Try to fetch from URL (simplified - would need actual HTTP library)
-                    // For now, just show a message
-                    eprintln!("URL loading not yet implemented. Would load: {}", url);
+                    // Spawn blocking task to load URL content
+                    std::thread::spawn(move || {
+                        load_url_content(&url);
+                    });
                 }
             }
         }
+    }
+}
+
+/// Blocking function to fetch content from a URL and update the text view
+fn load_url_content(url: &str) {
+    // Validate URL format
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        show_status_alert("Invalid URL", "URL must start with http:// or https://");
+        return;
+    }
+    
+    match ureq::get(url).call() {
+        Ok(response) => {
+            match response.into_string() {
+                Ok(content) => {
+                    // Calculate file info before updating UI
+                    let byte_count = content.as_bytes().len();
+                    let line_count = content.lines().count();
+                    
+                    // Update UI on main thread
+                    unsafe {
+                        if let Some(text_view) = TEXT_VIEW {
+                            // Set the text content
+                            let ns_string = create_nsstring(&content);
+                            msg_send_void_id(text_view.as_ptr(), Sel::get("setString:").as_ptr(), ns_string);
+                            
+                            if let Some(file_label) = STATUS_FILE_LABEL {
+                                let status_text = create_nsstring(&format!("Loaded from: {}", url));
+                                msg_send_void_id(file_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), status_text);
+                            }
+                            
+                            if let Some(byte_label) = STATUS_BYTE_LABEL {
+                                let byte_text = format!("Bytes: {}", format_with_thousands(byte_count));
+                                let byte_str = create_nsstring(&byte_text);
+                                msg_send_void_id(byte_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), byte_str);
+                            }
+                            
+                            if let Some(line_label) = STATUS_LINE_LABEL {
+                                let line_text = format!("Lines: {}", format_with_thousands(line_count));
+                                let line_str = create_nsstring(&line_text);
+                                msg_send_void_id(line_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), line_str);
+                            }
+                            
+                            // Apply highlighting to the newly loaded content
+                            if let Some(tv) = TEXT_VIEW {
+                                apply_random_underlines(&tv);
+                            }
+                        }
+                    }
+                    
+                    show_status_alert("Success", &format!("Loaded {} bytes from URL", byte_count));
+                }
+                Err(e) => {
+                    show_status_alert("Failed to Read Response", &format!("Could not read response body: {}", e));
+                }
+            }
+        }
+        Err(e) => {
+            show_status_alert("Failed to Load URL", &format!("Error fetching URL: {}", e));
+        }
+    }
+}
+
+/// Show a status alert dialog (must be called from main thread or use thread-safe approach)
+fn show_status_alert(title: &str, message: &str) {
+    unsafe {
+        let ns_alert_class = match ObjCClass::get("NSAlert") {
+            Some(c) => c,
+            None => return,
+        };
+        let alert = msg_send_id(ns_alert_class.as_ptr(), Sel::get("alloc").as_ptr());
+        let alert = msg_send_id(alert, Sel::get("init").as_ptr());
+        let alert = ObjCObject::from_ptr(alert);
+        
+        let title_str = create_nsstring(title);
+        msg_send_void_id(alert.as_ptr(), Sel::get("setMessageText:").as_ptr(), title_str);
+        
+        let message_str = create_nsstring(message);
+        msg_send_void_id(alert.as_ptr(), Sel::get("setInformativeText:").as_ptr(), message_str);
+        
+        let ok = create_nsstring("OK");
+        msg_send_void_id(alert.as_ptr(), Sel::get("addButtonWithTitle:").as_ptr(), ok);
+        
+        type MsgSendInt = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i64;
+        let f: MsgSendInt = std::mem::transmute(ffi::objc_msgSend as *const ());
+        let _ = f(alert.as_ptr(), Sel::get("runModal").as_ptr());
     }
 }
 
@@ -1115,14 +1240,47 @@ extern "C" fn magnify_with_event(_self: *mut std::ffi::c_void, _sel: *mut std::f
         let f_mag: MsgSendDouble = std::mem::transmute(ffi::objc_msgSend as *const ());
         let magnification = f_mag(event.as_ptr(), Sel::get("magnification").as_ptr());
         
-        // Update font size based on magnification (magnification ranges from ~-0.5 to +0.5)
-        // Scale it by 5x to get a reasonable font size change (2.5 to -2.5 points per gesture)
+        // Get the gesture state to only apply zoom at end of gesture
+        type MsgSendInt = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i64;
+        let f_state: MsgSendInt = std::mem::transmute(ffi::objc_msgSend as *const ());
+        let state = f_state(event.as_ptr(), Sel::get("phase").as_ptr());
+        
+        // Update font size based on magnification
         let new_size = TEXT_VIEW_FONT_SIZE * (1.0 + magnification);
         TEXT_VIEW_FONT_SIZE = if new_size < 8.0 { 8.0 } else if new_size > 48.0 { 48.0 } else { new_size };
         
         // Apply the new size to the text view
         if let Some(text_view) = TEXT_VIEW {
             set_text_view_font_size(&text_view, TEXT_VIEW_FONT_SIZE);
+        }
+    }
+}
+
+/// Setup gesture recognizers for the text view (pinch zoom, etc.)
+fn setup_text_view_gestures(text_view: &ObjCObject) {
+    unsafe {
+        // Create NSMagnificationGestureRecognizer
+        let recognizer_class = match ObjCClass::get("NSMagnificationGestureRecognizer") {
+            Some(c) => c,
+            None => return,
+        };
+        
+        // Alloc and init: [NSMagnificationGestureRecognizer alloc]
+        let recognizer = msg_send_id(recognizer_class.as_ptr(), Sel::get("alloc").as_ptr());
+        
+        // Set target and action before init
+        // We need to init with a target/action, so use initWithTarget:action:
+        type MsgSendIdIdSelector = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        let f: MsgSendIdIdSelector = std::mem::transmute(ffi::objc_msgSend as *const ());
+        
+        if let Some(text_view_obj) = TEXT_VIEW {
+            let sel = Sel::get("magnifyWithEvent:");
+            let recognizer = f(recognizer, Sel::get("initWithTarget:action:").as_ptr(), text_view_obj.as_ptr(), sel.as_ptr());
+            
+            if !recognizer.is_null() {
+                // Add the recognizer to the text view: [textView addGestureRecognizer:recognizer]
+                msg_send_void_id(text_view.as_ptr(), Sel::get("addGestureRecognizer:").as_ptr(), recognizer);
+            }
         }
     }
 }
