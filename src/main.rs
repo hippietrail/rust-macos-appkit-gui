@@ -251,10 +251,22 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     msg_send_void_id(toolbar.as_ptr(), Sel::get("setBackgroundColor:").as_ptr(), light_gray);
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), toolbar.as_ptr());
     
+    // Create scroll view containing text view
+    let ns_scroll_view_class = ObjCClass::get("NSScrollView").expect("Failed to get NSScrollView class");
+    let scroll_view = msg_send_id(ns_scroll_view_class.as_ptr(), Sel::get("alloc").as_ptr());
+    let scroll_view = msg_send_id_rect(scroll_view, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 0.0, y: 20.0 },
+        size: NSSize { width: 100.0, height: 100.0 },
+    });
+    let scroll_view = ObjCObject::from_ptr(scroll_view);
+    
+    // Configure scroll view
+    msg_send_void_bool(scroll_view.as_ptr(), Sel::get("setHasVerticalScroller:").as_ptr(), true);
+    
     // Create text view
     let text_view = msg_send_id(ObjCClass::get("NSTextView").unwrap().as_ptr(), Sel::get("alloc").as_ptr());
     let text_view = msg_send_id_rect(text_view, Sel::get("initWithFrame:").as_ptr(), NSRect {
-        origin: NSPoint { x: 0.0, y: 20.0 },
+        origin: NSPoint { x: 0.0, y: 0.0 },
         size: NSSize { width: 100.0, height: 100.0 },
     });
     let text_view = ObjCObject::from_ptr(text_view);
@@ -270,7 +282,12 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
         }
     };
     msg_send_void_id(text_view.as_ptr(), Sel::get("setString:").as_ptr(), text_obj);
-    msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), text_view.as_ptr());
+    
+    // Add text view to scroll view
+    msg_send_void_id(scroll_view.as_ptr(), Sel::get("setDocumentView:").as_ptr(), text_view.as_ptr());
+    
+    // Add scroll view to content view
+    msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), scroll_view.as_ptr());
     
     // Create status bar
     let status_bar = msg_send_id(ns_view_class.as_ptr(), Sel::get("alloc").as_ptr());
@@ -283,12 +300,12 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     msg_send_void_id(status_bar.as_ptr(), Sel::get("setBackgroundColor:").as_ptr(), dark_gray);
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), status_bar.as_ptr());
     
-    // Store references globally for layout updates
+    // Store references globally for layout updates (scroll_view instead of text_view)
     unsafe {
-        UI_ELEMENTS = Some((toolbar, text_view, status_bar));
+        UI_ELEMENTS = Some((toolbar, scroll_view, status_bar));
     }
     
-    (toolbar, text_view, status_bar)
+    (toolbar, scroll_view, status_bar)
 }
 
 /// Layout UI elements based on window size
@@ -308,21 +325,22 @@ fn layout_ui_elements(window: &ObjCObject) {
     // Get stored references
     unsafe {
         if let Some((toolbar, text_view, status_bar)) = UI_ELEMENTS {
-            // Layout toolbar (top)
+            // macOS uses flipped coordinates for window contentView (y increases downward)
+            // Toolbar at top (y = content_height - toolbar_height)
             let toolbar_frame = NSRect {
                 origin: NSPoint { x: 0.0, y: content_height - toolbar_height },
                 size: NSSize { width: content_width, height: toolbar_height },
             };
             set_view_frame(toolbar, toolbar_frame);
             
-            // Layout status bar (bottom)
+            // Status bar at bottom (y = 0)
             let status_bar_frame = NSRect {
                 origin: NSPoint { x: 0.0, y: 0.0 },
                 size: NSSize { width: content_width, height: status_bar_height },
             };
             set_view_frame(status_bar, status_bar_frame);
             
-            // Layout text view (middle)
+            // Text view in middle (y = status_bar_height, height = rest)
             let text_view_frame = NSRect {
                 origin: NSPoint { x: 0.0, y: status_bar_height },
                 size: NSSize { width: content_width, height: text_view_height },
