@@ -99,6 +99,38 @@ fn set_text_view_font_size(text_view: &ObjCObject, size: f64) {
     }
 }
 
+/// Callback for mouse enter event on text view (for hover popups)
+extern "C" fn mouse_entered(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void, event: *mut std::ffi::c_void) {
+    unsafe {
+        let event = ObjCObject::from_ptr(event);
+        
+        // Get tracking area from event
+        let tracking_area = msg_send_id(event.as_ptr(), Sel::get("trackingArea").as_ptr());
+        if tracking_area.is_null() {
+            return;
+        }
+        
+        // Get user info dictionary from tracking area
+        let tracking_area = ObjCObject::from_ptr(tracking_area);
+        let user_info = msg_send_id(tracking_area.as_ptr(), Sel::get("userInfo").as_ptr());
+        if user_info.is_null() {
+            eprintln!("Hover: mouse entered tracked area");
+            return;
+        }
+        
+        // In a full implementation, we'd show a tooltip/popup here
+        // For now, just log it
+        eprintln!("Hover: mouse entered - would show popup");
+    }
+}
+
+/// Callback for mouse exit event on text view
+extern "C" fn mouse_exited(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void, _event: *mut std::ffi::c_void) {
+    unsafe {
+        eprintln!("Hover: mouse exited - would hide popup");
+    }
+}
+
 /// Apply random red highlighting to words in the text view (visual effect for errors)
 /// This creates a spell-check-like effect
 fn apply_random_underlines(text_view: &ObjCObject) {
@@ -949,6 +981,16 @@ fn create_custom_text_view_class() -> *mut std::ffi::c_void {
         let method_types = std::ffi::CString::new("v@:@").unwrap();
         let imp = magnify_with_event as *mut std::ffi::c_void;
         ffi::class_addMethod(text_view_class, Sel::get("magnifyWithEvent:").as_ptr() as *mut std::ffi::c_void, imp, method_types.as_ptr());
+        
+        // Add mouseEntered: method for hover detection
+        let entered_types = std::ffi::CString::new("v@:@").unwrap();
+        let entered_imp = mouse_entered as *mut std::ffi::c_void;
+        ffi::class_addMethod(text_view_class, Sel::get("mouseEntered:").as_ptr() as *mut std::ffi::c_void, entered_imp, entered_types.as_ptr());
+        
+        // Add mouseExited: method for hover detection
+        let exited_types = std::ffi::CString::new("v@:@").unwrap();
+        let exited_imp = mouse_exited as *mut std::ffi::c_void;
+        ffi::class_addMethod(text_view_class, Sel::get("mouseExited:").as_ptr() as *mut std::ffi::c_void, exited_imp, exited_types.as_ptr());
         
         ffi::objc_registerClassPair(text_view_class);
         text_view_class
