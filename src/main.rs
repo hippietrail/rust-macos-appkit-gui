@@ -1,6 +1,6 @@
 mod ffi;
 
-use ffi::{ObjCClass, ObjCObject, Sel, NSRect, NSPoint, NSSize};
+use ffi::{ObjCClass, ObjCObject, Sel, NSRect, NSPoint, NSSize, NSRange};
 use ffi::msg_send_signatures::{self, *};
 
 /// Cast objc_msgSend to the right type and call it
@@ -60,6 +60,96 @@ fn msg_send_void_bool(obj: *mut std::ffi::c_void, sel: *mut std::ffi::c_void, ar
     unsafe {
         let f: MsgSendVoidBool = std::mem::transmute(ffi::objc_msgSend as *const ());
         f(obj, sel, arg)
+    }
+}
+
+/// Format a number with thousands separators
+fn format_with_thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.insert(0, ',');
+        }
+        result.insert(0, c);
+    }
+    result
+}
+
+/// Apply random squiggly underlines to words in the text view (via red text color)
+/// This creates a visual effect like spell-check errors
+fn apply_random_underlines(text_view: &ObjCObject) {
+    unsafe {
+        // Get the text storage from the text view
+        let text_storage = msg_send_id(text_view.as_ptr(), Sel::get("textStorage").as_ptr());
+        if text_storage.is_null() {
+            return;
+        }
+        let text_storage = ObjCObject::from_ptr(text_storage);
+        
+        // Get the string to find word boundaries
+        let text_str = msg_send_id(text_storage.as_ptr(), Sel::get("string").as_ptr());
+        if text_str.is_null() {
+            return;
+        }
+        
+        let text_cstr: *const std::ffi::c_char = {
+            let f: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *const std::ffi::c_char = 
+                std::mem::transmute(ffi::objc_msgSend as *const ());
+            f(text_str, Sel::get("UTF8String").as_ptr())
+        };
+        
+        if text_cstr.is_null() {
+            return;
+        }
+        
+        let text = std::ffi::CStr::from_ptr(text_cstr).to_string_lossy();
+        
+        // Find word boundaries
+        let mut words: Vec<(usize, usize)> = Vec::new(); // (start byte pos, length) pairs
+        let mut in_word = false;
+        let mut word_start = 0;
+        
+        for (pos, ch) in text.char_indices() {
+            if ch.is_alphabetic() || ch.is_numeric() {
+                if !in_word {
+                    word_start = pos;
+                    in_word = true;
+                }
+            } else {
+                if in_word {
+                    words.push((word_start, pos - word_start));
+                    in_word = false;
+                }
+            }
+        }
+        if in_word {
+            words.push((word_start, text.len() - word_start));
+        }
+        
+        // Get the NSColor for red
+        let ns_color_class = match ObjCClass::get("NSColor") {
+            Some(c) => c,
+            None => return,
+        };
+        let red_color = msg_send_id(ns_color_class.as_ptr(), Sel::get("redColor").as_ptr());
+        
+        // Apply red text color to every 5th word (visual mark for error-like words)
+        // This simulates spell-check highlighting
+        for (idx, (start, len)) in words.iter().enumerate() {
+            if idx % 5 == 2 && *len > 0 {
+                let range = NSRange {
+                    location: *start,
+                    length: *len,
+                };
+                
+                // addAttribute:value:range: on NSMutableAttributedString (which NSTextStorage is a subclass of)
+                let attr_key = create_nsstring("NSForegroundColorAttributeName");
+                type MsgSendVoidIdIdRange = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, NSRange);
+                let f: MsgSendVoidIdIdRange = std::mem::transmute(ffi::objc_msgSend as *const ());
+                f(text_storage.as_ptr(), Sel::get("addAttribute:value:range:").as_ptr(), attr_key, red_color, range);
+            }
+        }
     }
 }
 
@@ -259,8 +349,16 @@ static mut APP_DELEGATE: Option<ObjCObject> = None;
 /// Global reference to open button (for setting target)
 static mut OPEN_BUTTON: Option<ObjCObject> = None;
 
+/// Global reference to URL button (for setting target)
+static mut URL_BUTTON: Option<ObjCObject> = None;
+
 /// Global reference to window (for updating title)
 static mut WINDOW: Option<ObjCObject> = None;
+
+/// Global references to status bar labels (for updating status text)
+static mut STATUS_FILE_LABEL: Option<ObjCObject> = None;
+static mut STATUS_BYTE_LABEL: Option<ObjCObject> = None;
+static mut STATUS_LINE_LABEL: Option<ObjCObject> = None;
 
 /// Create the UI elements (toolbar, text view, status bar)
 fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, ObjCObject) {
@@ -301,6 +399,29 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     
     // Add button to toolbar
     msg_send_void_id(toolbar.as_ptr(), Sel::get("addSubview:").as_ptr(), open_button.as_ptr());
+    
+    // Add URL button to toolbar
+    let url_button = msg_send_id(ns_button_class.as_ptr(), Sel::get("alloc").as_ptr());
+    let url_button = msg_send_id_rect(url_button, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 100.0, y: 10.0 },
+        size: NSSize { width: 100.0, height: 24.0 },
+    });
+    let url_button = ObjCObject::from_ptr(url_button);
+    
+    // Set button title
+    let url_btn_title = create_nsstring("Open URL");
+    msg_send_void_id(url_button.as_ptr(), Sel::get("setTitle:").as_ptr(), url_btn_title);
+    
+    // Set button action
+    msg_send_void_id(url_button.as_ptr(), Sel::get("setAction:").as_ptr(), Sel::get("open_url:").as_ptr());
+    
+    // Store button globally so we can set target later
+    unsafe {
+        URL_BUTTON = Some(url_button.clone());
+    }
+    
+    // Add button to toolbar
+    msg_send_void_id(toolbar.as_ptr(), Sel::get("addSubview:").as_ptr(), url_button.as_ptr());
     
     // Create scroll view containing text view
     let ns_scroll_view_class = ObjCClass::get("NSScrollView").expect("Failed to get NSScrollView class");
@@ -378,6 +499,61 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     let dark_gray = msg_send_id(ns_color_class.as_ptr(), Sel::get("darkGrayColor").as_ptr());
     msg_send_void_id(status_bar.as_ptr(), Sel::get("setBackgroundColor:").as_ptr(), dark_gray);
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), status_bar.as_ptr());
+    
+    // Create status bar labels
+    let ns_label_class = ObjCClass::get("NSTextField").expect("Failed to get NSTextField class");
+    let white_color = msg_send_id(ns_color_class.as_ptr(), Sel::get("whiteColor").as_ptr());
+    
+    // File status label (left)
+    let file_label = msg_send_id(ns_label_class.as_ptr(), Sel::get("alloc").as_ptr());
+    let file_label = msg_send_id_rect(file_label, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 5.0, y: 2.0 },
+        size: NSSize { width: 150.0, height: 16.0 },
+    });
+    let file_label = ObjCObject::from_ptr(file_label);
+    let file_text = create_nsstring("No file loaded");
+    msg_send_void_id(file_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), file_text);
+    msg_send_void_id(file_label.as_ptr(), Sel::get("setTextColor:").as_ptr(), white_color);
+    msg_send_void_id(file_label.as_ptr(), Sel::get("setBordered:").as_ptr(), std::ptr::null_mut());
+    msg_send_void_id(file_label.as_ptr(), Sel::get("setDrawsBackground:").as_ptr(), std::ptr::null_mut());
+    msg_send_void_bool(file_label.as_ptr(), Sel::get("setEditable:").as_ptr(), false);
+    msg_send_void_bool(file_label.as_ptr(), Sel::get("setSelectable:").as_ptr(), false);
+    msg_send_void_id(status_bar.as_ptr(), Sel::get("addSubview:").as_ptr(), file_label.as_ptr());
+    unsafe { STATUS_FILE_LABEL = Some(file_label.clone()); }
+    
+    // Byte count label (middle)
+    let byte_label = msg_send_id(ns_label_class.as_ptr(), Sel::get("alloc").as_ptr());
+    let byte_label = msg_send_id_rect(byte_label, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 160.0, y: 2.0 },
+        size: NSSize { width: 120.0, height: 16.0 },
+    });
+    let byte_label = ObjCObject::from_ptr(byte_label);
+    let byte_text = create_nsstring("Bytes: 0");
+    msg_send_void_id(byte_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), byte_text);
+    msg_send_void_id(byte_label.as_ptr(), Sel::get("setTextColor:").as_ptr(), white_color);
+    msg_send_void_id(byte_label.as_ptr(), Sel::get("setBordered:").as_ptr(), std::ptr::null_mut());
+    msg_send_void_id(byte_label.as_ptr(), Sel::get("setDrawsBackground:").as_ptr(), std::ptr::null_mut());
+    msg_send_void_bool(byte_label.as_ptr(), Sel::get("setEditable:").as_ptr(), false);
+    msg_send_void_bool(byte_label.as_ptr(), Sel::get("setSelectable:").as_ptr(), false);
+    msg_send_void_id(status_bar.as_ptr(), Sel::get("addSubview:").as_ptr(), byte_label.as_ptr());
+    unsafe { STATUS_BYTE_LABEL = Some(byte_label.clone()); }
+    
+    // Line count label (right)
+    let line_label = msg_send_id(ns_label_class.as_ptr(), Sel::get("alloc").as_ptr());
+    let line_label = msg_send_id_rect(line_label, Sel::get("initWithFrame:").as_ptr(), NSRect {
+        origin: NSPoint { x: 285.0, y: 2.0 },
+        size: NSSize { width: 120.0, height: 16.0 },
+    });
+    let line_label = ObjCObject::from_ptr(line_label);
+    let line_text = create_nsstring("Lines: 0");
+    msg_send_void_id(line_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), line_text);
+    msg_send_void_id(line_label.as_ptr(), Sel::get("setTextColor:").as_ptr(), white_color);
+    msg_send_void_id(line_label.as_ptr(), Sel::get("setBordered:").as_ptr(), std::ptr::null_mut());
+    msg_send_void_id(line_label.as_ptr(), Sel::get("setDrawsBackground:").as_ptr(), std::ptr::null_mut());
+    msg_send_void_bool(line_label.as_ptr(), Sel::get("setEditable:").as_ptr(), false);
+    msg_send_void_bool(line_label.as_ptr(), Sel::get("setSelectable:").as_ptr(), false);
+    msg_send_void_id(status_bar.as_ptr(), Sel::get("addSubview:").as_ptr(), line_label.as_ptr());
+    unsafe { STATUS_LINE_LABEL = Some(line_label.clone()); }
     
     // Store references globally for layout updates and file loading
     unsafe {
@@ -543,8 +719,108 @@ extern "C" fn open_file(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_voi
                                 let title_str = create_nsstring(filename);
                                 msg_send_void_id(window.as_ptr(), Sel::get("setTitle:").as_ptr(), title_str);
                             }
+                            
+                            // Update status bar labels
+                            let byte_count = contents.len();
+                            let line_count = contents.lines().count();
+                            
+                            if let Some(file_label) = STATUS_FILE_LABEL {
+                                let file_text = {
+                                    let path_str = file_path.as_ref();
+                                    let filename = path_str.split('/').last().unwrap_or(path_str);
+                                    create_nsstring(filename)
+                                };
+                                msg_send_void_id(file_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), file_text);
+                            }
+                            
+                            if let Some(byte_label) = STATUS_BYTE_LABEL {
+                                let byte_text = format!("Bytes: {}", format_with_thousands(byte_count));
+                                let byte_str = create_nsstring(&byte_text);
+                                msg_send_void_id(byte_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), byte_str);
+                            }
+                            
+                            if let Some(line_label) = STATUS_LINE_LABEL {
+                                let line_text = format!("Lines: {}", format_with_thousands(line_count));
+                                let line_str = create_nsstring(&line_text);
+                                msg_send_void_id(line_label.as_ptr(), Sel::get("setStringValue:").as_ptr(), line_str);
+                            }
+                            
+                            // TODO: Apply random color highlighting to simulate spell-check errors
+                            // This requires proper NSAttributedString handling which is complex via FFI
+                            // if let Some(tv) = TEXT_VIEW {
+                            //     apply_random_underlines(&tv);
+                            // }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Menu action: Open URL input dialog and load content from URL
+extern "C" fn open_url(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void, _sender: *mut std::ffi::c_void) {
+    unsafe {
+        // Create an NSAlert for simple text input
+        let ns_alert_class = match ObjCClass::get("NSAlert") {
+            Some(c) => c,
+            None => return,
+        };
+        let alert = msg_send_id(ns_alert_class.as_ptr(), Sel::get("alloc").as_ptr());
+        let alert = msg_send_id(alert, Sel::get("init").as_ptr());
+        let alert = ObjCObject::from_ptr(alert);
+        
+        let title = create_nsstring("Load from URL");
+        msg_send_void_id(alert.as_ptr(), Sel::get("setMessageText:").as_ptr(), title);
+        
+        let info = create_nsstring("Enter a URL to load:");
+        msg_send_void_id(alert.as_ptr(), Sel::get("setInformativeText:").as_ptr(), info);
+        
+        // Add OK and Cancel buttons
+        let ok_title = create_nsstring("OK");
+        msg_send_void_id(alert.as_ptr(), Sel::get("addButtonWithTitle:").as_ptr(), ok_title);
+        
+        let cancel_title = create_nsstring("Cancel");
+        msg_send_void_id(alert.as_ptr(), Sel::get("addButtonWithTitle:").as_ptr(), cancel_title);
+        
+        // Create text field for URL input
+        let ns_text_field_class = match ObjCClass::get("NSTextField") {
+            Some(c) => c,
+            None => return,
+        };
+        let text_field = msg_send_id(ns_text_field_class.as_ptr(), Sel::get("alloc").as_ptr());
+        let text_field = msg_send_id_rect(text_field, Sel::get("initWithFrame:").as_ptr(), NSRect {
+            origin: NSPoint { x: 0.0, y: 0.0 },
+            size: NSSize { width: 300.0, height: 24.0 },
+        });
+        let text_field = ObjCObject::from_ptr(text_field);
+        
+        let placeholder = create_nsstring("https://example.com/file.txt");
+        msg_send_void_id(text_field.as_ptr(), Sel::get("setPlaceholderString:").as_ptr(), placeholder);
+        
+        msg_send_void_id(alert.as_ptr(), Sel::get("setAccessoryView:").as_ptr(), text_field.as_ptr());
+        
+        // Show the alert
+        type MsgSendInt = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i64;
+        let f: MsgSendInt = std::mem::transmute(ffi::objc_msgSend as *const ());
+        let result = f(alert.as_ptr(), Sel::get("runModal").as_ptr());
+        
+        if result == 1000 { // NSAlertFirstButtonReturn
+            // Get text field content
+            let url_str = msg_send_id(text_field.as_ptr(), Sel::get("stringValue").as_ptr());
+            if !url_str.is_null() {
+                let url_cstr: *const std::ffi::c_char = unsafe {
+                    let f: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *const std::ffi::c_char = 
+                        std::mem::transmute(ffi::objc_msgSend as *const ());
+                    f(url_str, Sel::get("UTF8String").as_ptr())
+                };
+                
+                if !url_cstr.is_null() {
+                    let url = std::ffi::CStr::from_ptr(url_cstr).to_string_lossy();
+                    
+                    // Try to fetch from URL (simplified - would need actual HTTP library)
+                    // For now, just show a message
+                    eprintln!("URL loading not yet implemented. Would load: {}", url);
                 }
             }
         }
@@ -575,8 +851,14 @@ extern "C" fn app_did_finish_launching(_self: *mut std::ffi::c_void, _sel: *mut 
         // Add UI elements to the window (this creates the views but doesn't layout yet)
         setup_window_ui(&window);
         
-        // Set button target to delegate (now that delegate exists)
+        // Set button targets to delegate (now that delegate exists)
         if let Some(button) = OPEN_BUTTON {
+            if let Some(delegate) = APP_DELEGATE {
+                msg_send_void_id(button.as_ptr(), Sel::get("setTarget:").as_ptr(), delegate.as_ptr());
+            }
+        }
+        
+        if let Some(button) = URL_BUTTON {
             if let Some(delegate) = APP_DELEGATE {
                 msg_send_void_id(button.as_ptr(), Sel::get("setTarget:").as_ptr(), delegate.as_ptr());
             }
@@ -621,6 +903,11 @@ fn create_app_delegate(_app: &ObjCObject) -> ObjCObject {
             let open_file_types = std::ffi::CString::new("v@:@").unwrap();
             let open_file_imp = open_file as *mut std::ffi::c_void;
             ffi::class_addMethod(delegate_class, Sel::get("open_file:").as_ptr(), open_file_imp, open_file_types.as_ptr());
+            
+            // Add open_url: method
+            let open_url_types = std::ffi::CString::new("v@:@").unwrap();
+            let open_url_imp = open_url as *mut std::ffi::c_void;
+            ffi::class_addMethod(delegate_class, Sel::get("open_url:").as_ptr(), open_url_imp, open_url_types.as_ptr());
             
             ffi::objc_registerClassPair(delegate_class);
             delegate_class
