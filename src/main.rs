@@ -259,6 +259,9 @@ static mut APP_DELEGATE: Option<ObjCObject> = None;
 /// Global reference to open button (for setting target)
 static mut OPEN_BUTTON: Option<ObjCObject> = None;
 
+/// Global reference to window (for updating title)
+static mut WINDOW: Option<ObjCObject> = None;
+
 /// Create the UI elements (toolbar, text view, status bar)
 fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, ObjCObject) {
     let ns_view_class = ObjCClass::get("NSView").expect("Failed to get NSView class");
@@ -323,8 +326,23 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     });
     let text_view = ObjCObject::from_ptr(text_view);
     msg_send_void_bool(text_view.as_ptr(), Sel::get("setEditable:").as_ptr(), false);
-    // Note: NSTextView doesn't have setWordWrap: - disabling word wrap requires more complex setup with NSTextContainer
-    // msg_send_void_bool(text_view.as_ptr(), Sel::get("setWordWrap:").as_ptr(), false);
+    
+    // Allow text view to be wider than scroll view for horizontal scrolling
+    msg_send_void_bool(text_view.as_ptr(), Sel::get("setHorizontallyResizable:").as_ptr(), true);
+    msg_send_void_bool(text_view.as_ptr(), Sel::get("setVerticallyResizable:").as_ptr(), true);
+    
+    // Get text container and configure it
+    let text_container = msg_send_id(text_view.as_ptr(), Sel::get("textContainer").as_ptr());
+    if !text_container.is_null() {
+        let text_container = ObjCObject::from_ptr(text_container);
+        // Set container size to a very large width but let height be unlimited
+        type MsgSendVoidSize = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, NSSize);
+        unsafe {
+            let f: MsgSendVoidSize = std::mem::transmute(ffi::objc_msgSend as *const ());
+            let huge_size = NSSize { width: 100000.0, height: 100000.0 };
+            f(text_container.as_ptr(), Sel::get("setContainerSize:").as_ptr(), huge_size);
+        }
+    }
     
     // Add sample text
     let sample_text = match std::ffi::CString::new("Sample Text View\n\nThis is a read-only text view with vertical scrolling support.") {
@@ -408,6 +426,19 @@ fn layout_ui_elements(window: &ObjCObject) {
                 size: NSSize { width: content_width, height: text_view_height },
             };
             set_view_frame(text_view, text_view_frame);
+            
+            // Update text container width to match scroll view (for proper text wrapping on resize)
+            if let Some(text_view_obj) = TEXT_VIEW {
+                let text_container = msg_send_id(text_view_obj.as_ptr(), Sel::get("textContainer").as_ptr());
+                if !text_container.is_null() {
+                    let text_container = ObjCObject::from_ptr(text_container);
+                    type MsgSendVoidSize = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, NSSize);
+                    let f: MsgSendVoidSize = std::mem::transmute(ffi::objc_msgSend as *const ());
+                    // Set width to current scroll view width, height unlimited
+                    let new_size = NSSize { width: content_width, height: 100000.0 };
+                    f(text_container.as_ptr(), Sel::get("setContainerSize:").as_ptr(), new_size);
+                }
+            }
         }
     }
 }
@@ -486,6 +517,31 @@ extern "C" fn open_file(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_voi
                             if let Some(text_view) = TEXT_VIEW {
                                 let content_str = create_nsstring(&contents);
                                 msg_send_void_id(text_view.as_ptr(), Sel::get("setString:").as_ptr(), content_str);
+                                
+                                // Re-sync text container after loading to ensure proper layout
+                                if let Some(window) = WINDOW {
+                                    let content_view = msg_send_id(window.as_ptr(), Sel::get("contentView").as_ptr());
+                                    let content_bounds = msg_send_rect(content_view, Sel::get("bounds").as_ptr());
+                                    let scroll_view_width = content_bounds.size.width;
+                                    
+                                    let text_container = msg_send_id(text_view.as_ptr(), Sel::get("textContainer").as_ptr());
+                                    if !text_container.is_null() {
+                                        let text_container = ObjCObject::from_ptr(text_container);
+                                        type MsgSendVoidSize = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, NSSize);
+                                        let f: MsgSendVoidSize = std::mem::transmute(ffi::objc_msgSend as *const ());
+                                        let new_size = NSSize { width: scroll_view_width, height: 100000.0 };
+                                        f(text_container.as_ptr(), Sel::get("setContainerSize:").as_ptr(), new_size);
+                                    }
+                                }
+                            }
+                            
+                            // Update window title with filename
+                            if let Some(window) = WINDOW {
+                                // Extract filename from full path
+                                let path_str = file_path.as_ref();
+                                let filename = path_str.split('/').last().unwrap_or(path_str);
+                                let title_str = create_nsstring(filename);
+                                msg_send_void_id(window.as_ptr(), Sel::get("setTitle:").as_ptr(), title_str);
                             }
                         }
                     }
@@ -512,6 +568,9 @@ extern "C" fn app_did_finish_launching(_self: *mut std::ffi::c_void, _sel: *mut 
         
         // Create the window
         let window = create_window();
+        
+        // Store window globally for title updates
+        WINDOW = Some(window.clone());
         
         // Add UI elements to the window (this creates the views but doesn't layout yet)
         setup_window_ui(&window);
