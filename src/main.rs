@@ -157,8 +157,7 @@ fn apply_random_underlines(text_view: &ObjCObject) {
         };
         let orange_color = msg_send_id(ns_color_class.as_ptr(), Sel::get("orangeColor").as_ptr());
         
-        // Apply color to every 5th word - use a simple approach
-        // Just change the color of random words to make them stand out
+        // Apply red color to every 5th word to simulate spell-check highlights
         for (idx, (start, len)) in words.iter().enumerate() {
             if idx % 5 == 2 && *len > 0 {
                 let range = NSRange {
@@ -166,14 +165,17 @@ fn apply_random_underlines(text_view: &ObjCObject) {
                     length: *len,
                 };
                 
-                // We need to use the correct method signature for addAttribute:value:range:
-                // The signature is: (id, SEL, id, id, NSRange) -> void
-                // But NSRange is a struct, so we need to handle it carefully
+                // Use addAttribute:value:range: to add color attribute
+                // The method signature is: void addAttribute:(NSString *)name value:(id)value range:(NSRange)range
+                let attr_name = create_nsstring("NSForegroundColorAttributeName");
                 
-                // For now, let's try a simpler color change using direct objc_msgSend
-                // by building an Objective-C dictionary with attributes
+                // Build the objc_msgSend call with the NSRange parameter
+                // We need to cast to the proper function pointer type
+                type MsgSendVoidIdIdRange = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void, NSRange);
+                let f: MsgSendVoidIdIdRange = std::mem::transmute(ffi::objc_msgSend as *const ());
                 
-                eprintln!("Marking word at range ({}, {})", range.location, range.length);
+                // Call: [textStorage addAttribute:@"NSForegroundColorAttributeName" value:orangeColor range:range]
+                f(text_storage.as_ptr(), Sel::get("addAttribute:value:range:").as_ptr() as *mut std::ffi::c_void, attr_name, orange_color, range);
             }
         }
     }
