@@ -38,28 +38,60 @@ extern "C" {
     /// Get a selector by name
     pub fn sel_getUid(name: *const c_char) -> *mut c_void;
     
-    /// Send a message to an object (returns void/generic value)
-    /// This is the core variadic function - callers handle return value casting
+    /// Send a message - raw variadic function (use with casting for correct ABI)
     #[link_name = "objc_msgSend"]
     pub fn objc_msgSend(obj: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
-    
-    /// Send a message to a class (void return)
-    pub fn objc_msgSend_stret(obj: *mut c_void, sel: *mut c_void, ...);
-    
-    /// Allocate memory for a new instance
-    pub fn objc_allocateClassPair(
-        superclass: *mut c_void,
-        name: *const c_char,
-        extraBytes: usize,
-    ) -> *mut c_void;
     
     /// Register a newly created class
     pub fn objc_registerClassPair(cls: *mut c_void);
 }
 
+/// Represents an NSRect/CGRect structure  
+/// Used for frame positioning and sizing
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct NSRect {
+    pub origin: NSPoint,
+    pub size: NSSize,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct NSPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct NSSize {
+    pub width: f64,
+    pub height: f64,
+}
+
 // ============================================================================
 // Safe wrappers for basic operations
 // ============================================================================
+
+/// Type-safe function pointers for common objc_msgSend signatures
+pub mod msg_send_signatures {
+    use super::*;
+    
+    /// id objc_msgSend(id obj, SEL sel)
+    pub type MsgSendId = extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
+    
+    /// void objc_msgSend(id obj, SEL sel, id arg)
+    pub type MsgSendVoidId = extern "C" fn(*mut c_void, *mut c_void, *mut c_void);
+    
+    /// void objc_msgSend(id obj, SEL sel, int arg)
+    pub type MsgSendVoidInt = extern "C" fn(*mut c_void, *mut c_void, i32);
+    
+    /// id objc_msgSend(id obj, SEL sel, NSRect frame)
+    pub type MsgSendIdRect = extern "C" fn(*mut c_void, *mut c_void, NSRect) -> *mut c_void;
+    
+    /// id objc_msgSend(id obj, SEL sel, NSRect frame, int styleMask, int backing, int defer)
+    pub type MsgSendIdRectIntIntInt = extern "C" fn(*mut c_void, *mut c_void, NSRect, i32, i32, i32) -> *mut c_void;
+}
 
 impl ObjCClass {
     /// Get a class by name (e.g., "NSApplication")
