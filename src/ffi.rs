@@ -124,6 +124,9 @@ pub mod msg_send_signatures {
     
     /// void objc_msgSend(id obj, SEL sel, id attr_key, id attr_val, NSRange range)
     pub type MsgSendVoidIdIdRange = extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void, NSRange);
+    
+    /// id objc_msgSend(id obj, SEL sel) -> id (for getting length)
+    pub type MsgSendIdVoid = extern "C" fn(*mut c_void, *mut c_void) -> usize;
 }
 
 /// NSRange structure for string/attributed string ranges
