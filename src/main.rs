@@ -76,6 +76,29 @@ fn format_with_thousands(n: usize) -> String {
     result
 }
 
+/// Set the font size for the text view
+fn set_text_view_font_size(text_view: &ObjCObject, size: f64) {
+    unsafe {
+        // Clamp font size between 8 and 48 points
+        let clamped_size = if size < 8.0 { 8.0 } else if size > 48.0 { 48.0 } else { size };
+        
+        let ns_font_class = match ObjCClass::get("NSFont") {
+            Some(c) => c,
+            None => return,
+        };
+        
+        // Get system font with the new size: [NSFont systemFontOfSize:size]
+        type MsgSendIdDouble = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, f64) -> *mut std::ffi::c_void;
+        let f: MsgSendIdDouble = std::mem::transmute(ffi::objc_msgSend as *const ());
+        let font = f(ns_font_class.as_ptr(), Sel::get("systemFontOfSize:").as_ptr(), clamped_size);
+        
+        if !font.is_null() {
+            // Set the font on the text view: [textView setFont:font]
+            msg_send_void_id(text_view.as_ptr(), Sel::get("setFont:").as_ptr(), font);
+        }
+    }
+}
+
 /// Apply random squiggly underlines to words in the text view (via red text color)
 /// This creates a visual effect like spell-check errors
 fn apply_random_underlines(text_view: &ObjCObject) {
@@ -360,6 +383,9 @@ static mut STATUS_FILE_LABEL: Option<ObjCObject> = None;
 static mut STATUS_BYTE_LABEL: Option<ObjCObject> = None;
 static mut STATUS_LINE_LABEL: Option<ObjCObject> = None;
 
+/// Global text view font size for pinch zoom
+static mut TEXT_VIEW_FONT_SIZE: f64 = 12.0;
+
 /// Create the UI elements (toolbar, text view, status bar)
 fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, ObjCObject) {
     let ns_view_class = ObjCClass::get("NSView").expect("Failed to get NSView class");
@@ -435,12 +461,9 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     // Configure scroll view
     msg_send_void_bool(scroll_view.as_ptr(), Sel::get("setHasVerticalScroller:").as_ptr(), true);
     
-    // Create text view
-    let ns_text_view_class = match ObjCClass::get("NSTextView") {
-        Some(c) => c,
-        None => return (toolbar, scroll_view, ObjCObject::from_ptr(std::ptr::null_mut())),
-    };
-    let text_view = msg_send_id(ns_text_view_class.as_ptr(), Sel::get("alloc").as_ptr());
+    // Create custom text view class that supports pinch zoom
+    let ns_text_view_class = create_custom_text_view_class();
+    let text_view = msg_send_id(ns_text_view_class, Sel::get("alloc").as_ptr());
     let text_view = msg_send_id_rect(text_view, Sel::get("initWithFrame:").as_ptr(), NSRect {
         origin: NSPoint { x: 0.0, y: 0.0 },
         size: NSSize { width: 100.0, height: 100.0 },
@@ -485,6 +508,19 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
     
     // Add text view to scroll view
     msg_send_void_id(scroll_view.as_ptr(), Sel::get("setDocumentView:").as_ptr(), text_view.as_ptr());
+    
+    // Add magnification gesture recognizer for pinch zoom
+    let ns_magnification_gesture_class = ObjCClass::get("NSMagnificationGestureRecognizer");
+    if let Some(recognizer_class) = ns_magnification_gesture_class {
+        // Create gesture recognizer: [[NSMagnificationGestureRecognizer alloc] initWithTarget:action:]
+        let gesture_recognizer = msg_send_id(recognizer_class.as_ptr(), Sel::get("alloc").as_ptr());
+        
+        // We need a gesture handler - for now we'll skip the target/action setup
+        // and instead override on the text view level
+        let _gesture = msg_send_id(gesture_recognizer, Sel::get("init").as_ptr());
+        // In a real implementation, we'd set target and action here
+        // For now, we'll rely on the view's magnifyWithEvent: if it's overridden
+    }
     
     // Add scroll view to content view
     msg_send_void_id(content_view.as_ptr(), Sel::get("addSubview:").as_ptr(), scroll_view.as_ptr());
@@ -876,6 +912,44 @@ extern "C" fn app_did_finish_launching(_self: *mut std::ffi::c_void, _sel: *mut 
 }
 
 /// Create app delegate class with applicationDidFinishLaunching: callback
+/// Create custom NSTextView subclass that handles pinch zoom
+fn create_custom_text_view_class() -> *mut std::ffi::c_void {
+    unsafe {
+        // Check if class already exists
+        let class_name = std::ffi::CString::new("CustomTextView").unwrap();
+        let existing_class = ffi::objc_getClass(class_name.as_ptr());
+        
+        if !existing_class.is_null() {
+            return existing_class;
+        }
+        
+        // Create new class inheriting from NSTextView
+        let ns_text_view = match ObjCClass::get("NSTextView") {
+            Some(c) => c,
+            None => {
+                // Fallback to standard NSTextView
+                return ObjCClass::get("NSTextView")
+                    .map(|c| c.as_ptr())
+                    .unwrap_or(std::ptr::null_mut());
+            }
+        };
+        
+        let text_view_class = ffi::objc_allocateClassPair(ns_text_view.as_ptr(), class_name.as_ptr(), 0);
+        
+        if text_view_class.is_null() {
+            return ns_text_view.as_ptr();
+        }
+        
+        // Add magnifyWithEvent: method
+        let method_types = std::ffi::CString::new("v@:@").unwrap();
+        let imp = magnify_with_event as *mut std::ffi::c_void;
+        ffi::class_addMethod(text_view_class, Sel::get("magnifyWithEvent:").as_ptr() as *mut std::ffi::c_void, imp, method_types.as_ptr());
+        
+        ffi::objc_registerClassPair(text_view_class);
+        text_view_class
+    }
+}
+
 fn create_app_delegate(_app: &ObjCObject) -> ObjCObject {
     unsafe {
         // Try to get existing class first
@@ -981,5 +1055,27 @@ extern "C" fn window_did_resize(_self: *mut std::ffi::c_void, _sel: *mut std::ff
         };
         let window = ObjCObject::from_ptr(window);
         layout_ui_elements(&window);
+    }
+}
+
+/// Callback for magnification gesture (pinch zoom) 
+extern "C" fn magnify_with_event(_self: *mut std::ffi::c_void, _sel: *mut std::ffi::c_void, event: *mut std::ffi::c_void) {
+    unsafe {
+        let event = ObjCObject::from_ptr(event);
+        
+        // Get magnification value from event
+        type MsgSendDouble = extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> f64;
+        let f_mag: MsgSendDouble = std::mem::transmute(ffi::objc_msgSend as *const ());
+        let magnification = f_mag(event.as_ptr(), Sel::get("magnification").as_ptr());
+        
+        // Update font size based on magnification (magnification ranges from ~-0.5 to +0.5)
+        // Scale it by 5x to get a reasonable font size change (2.5 to -2.5 points per gesture)
+        let new_size = TEXT_VIEW_FONT_SIZE * (1.0 + magnification);
+        TEXT_VIEW_FONT_SIZE = if new_size < 8.0 { 8.0 } else if new_size > 48.0 { 48.0 } else { new_size };
+        
+        // Apply the new size to the text view
+        if let Some(text_view) = TEXT_VIEW {
+            set_text_view_font_size(&text_view, TEXT_VIEW_FONT_SIZE);
+        }
     }
 }
