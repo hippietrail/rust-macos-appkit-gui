@@ -54,6 +54,9 @@ fn main() {
     let shared_app = msg_send_id(ns_app_class.as_ptr(), Sel::get("sharedApplication").as_ptr());
     let shared_app = ObjCObject::from_ptr(shared_app);
     
+    // Set activation policy to Regular (makes app appear in Dock and be frontmost)
+    msg_send_void_int(shared_app.as_ptr(), Sel::get("setActivationPolicy:").as_ptr(), 0);
+    
     // CRITICAL: finishLaunching must be called before creating windows
     unsafe {
         extern "C" {
