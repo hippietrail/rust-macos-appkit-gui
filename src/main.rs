@@ -202,12 +202,13 @@ fn create_ui_elements(content_view: &ObjCObject) -> (ObjCObject, ObjCObject, Obj
 
 /// Layout UI elements based on window size
 fn layout_ui_elements(window: &ObjCObject) {
-    let window_frame = msg_send_rect(window.as_ptr(), Sel::get("frame").as_ptr());
-    let content_height = window_frame.size.height;
-    let content_width = window_frame.size.width;
-    
     let content_view = msg_send_id(window.as_ptr(), Sel::get("contentView").as_ptr());
     let content_view = ObjCObject::from_ptr(content_view);
+    
+    // Use contentView's bounds, not window's frame
+    let content_bounds = msg_send_rect(content_view.as_ptr(), Sel::get("bounds").as_ptr());
+    let content_height = content_bounds.size.height;
+    let content_width = content_bounds.size.width;
     
     let toolbar_height = 44.0;
     let status_bar_height = 20.0;
