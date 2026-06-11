@@ -115,20 +115,24 @@ pub mod msg_send_signatures {
     pub type MsgSendVoidRect = extern "C" fn(*mut c_void, *mut c_void, NSRect);
 
     /// id objc_msgSend(id obj, SEL sel, int index)
-    pub type MsgSendIdInt = extern "C" fn(*mut c_void, *mut c_void, i32) -> *mut c_void;
+    pub type _MsgSendIdInt = extern "C" fn(*mut c_void, *mut c_void, i32) -> *mut c_void;
 
     /// id objc_msgSend(id obj, SEL sel, const char* cString)
     pub type MsgSendIdCStr = extern "C" fn(*mut c_void, *mut c_void, *const c_char) -> *mut c_void;
+
+    /// id objc_msgSend(id obj, SEL sel, const void* bytes, NSUInteger length)
+    pub type MsgSendIdPtrUsize =
+        extern "C" fn(*mut c_void, *mut c_void, *const c_void, usize) -> *mut c_void;
 
     /// id objc_msgSend(id obj, SEL sel, id arg)
     pub type MsgSendIdId = extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
 
     /// void objc_msgSend(id obj, SEL sel, id attr_key, id attr_val, NSRange range)
-    pub type MsgSendVoidIdIdRange =
+    pub type _MsgSendVoidIdIdRange =
         extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void, NSRange);
 
     /// id objc_msgSend(id obj, SEL sel) -> id (for getting length)
-    pub type MsgSendIdVoid = extern "C" fn(*mut c_void, *mut c_void) -> usize;
+    pub type _MsgSendIdVoid = extern "C" fn(*mut c_void, *mut c_void) -> usize;
 }
 
 /// NSRange structure for string/attributed string ranges
@@ -194,12 +198,12 @@ impl ObjCObject {
     }
 
     /// Send a message that returns void
-    pub unsafe fn send_msg(&self, sel: Sel) {
+    pub unsafe fn _send_msg(&self, sel: Sel) {
         objc_msgSend(self.0, sel.0);
     }
 
     /// Send a message that returns an ObjCObject
-    pub unsafe fn send_msg_object(&self, sel: Sel) -> Option<ObjCObject> {
+    pub unsafe fn _send_msg_object(&self, sel: Sel) -> Option<ObjCObject> {
         let result = objc_msgSend(self.0, sel.0);
         if result.is_null() {
             None
@@ -209,7 +213,7 @@ impl ObjCObject {
     }
 
     /// Send a message with one argument that returns an ObjCObject
-    pub unsafe fn send_msg_object_arg(&self, sel: Sel, arg: ObjCObject) -> Option<ObjCObject> {
+    pub unsafe fn _send_msg_object_arg(&self, sel: Sel, arg: ObjCObject) -> Option<ObjCObject> {
         let result = objc_msgSend(self.0, sel.0, arg.0);
         if result.is_null() {
             None

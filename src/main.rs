@@ -122,34 +122,30 @@ fn set_text_view_font_size(text_view: &ObjCObject, size: f64) {
 
 /// Callback for mouse enter event on text view (for hover popups)
 extern "C" fn mouse_entered(_self: *mut c_void, _sel: *mut c_void, event: *mut c_void) {
-    unsafe {
-        let event = ObjCObject::from_ptr(event);
+    let event = ObjCObject::from_ptr(event);
 
-        // Get tracking area from event
-        let tracking_area = msg_send_id(event.as_ptr(), Sel::get("trackingArea").as_ptr());
-        if tracking_area.is_null() {
-            return;
-        }
-
-        // Get user info dictionary from tracking area
-        let tracking_area = ObjCObject::from_ptr(tracking_area);
-        let user_info = msg_send_id(tracking_area.as_ptr(), Sel::get("userInfo").as_ptr());
-        if user_info.is_null() {
-            eprintln!("Hover: mouse entered tracked area");
-            return;
-        }
-
-        // In a full implementation, we'd show a tooltip/popup here
-        // For now, just log it
-        eprintln!("Hover: mouse entered - would show popup");
+    // Get tracking area from event
+    let tracking_area = msg_send_id(event.as_ptr(), Sel::get("trackingArea").as_ptr());
+    if tracking_area.is_null() {
+        return;
     }
+
+    // Get user info dictionary from tracking area
+    let tracking_area = ObjCObject::from_ptr(tracking_area);
+    let user_info = msg_send_id(tracking_area.as_ptr(), Sel::get("userInfo").as_ptr());
+    if user_info.is_null() {
+        eprintln!("Hover: mouse entered tracked area");
+        return;
+    }
+
+    // In a full implementation, we'd show a tooltip/popup here
+    // For now, just log it
+    eprintln!("Hover: mouse entered - would show popup");
 }
 
 /// Callback for mouse exit event on text view
 extern "C" fn mouse_exited(_self: *mut c_void, _sel: *mut c_void, _event: *mut c_void) {
-    unsafe {
-        eprintln!("Hover: mouse exited - would hide popup");
-    }
+    eprintln!("Hover: mouse exited - would hide popup");
 }
 
 /// Apply random red highlighting to words in the text view (visual effect for errors)
@@ -476,6 +472,51 @@ fn main() {
         Sel::get("setActivationPolicy:").as_ptr(),
         0,
     );
+
+    // ================= CUSTOM DOCK ICON INJECTION =================
+    unsafe {
+        let nsdata_class = ObjCClass::get("NSData").expect("Failed to get NSData class");
+        let nsimage_class = ObjCClass::get("NSImage").expect("Failed to get NSImage class");
+
+        // 1. Load the raw embedded bytes
+        let icns_bytes = include_bytes!("../crabby.icns");
+
+        // 2. Create NSData: [NSData dataWithBytes:icns_bytes.as_ptr() length:icns_bytes.len()]
+        // Fixed: Cast to *const () first to prevent zero-sized type transmute error
+        let msg_send_ptr = objc_msgSend as *const ();
+
+        let data_with_bytes: MsgSendIdPtrUsize = transmute(msg_send_ptr);
+        let nsdata = data_with_bytes(
+            nsdata_class.as_ptr(),
+            Sel::get("dataWithBytes:length:").as_ptr(),
+            icns_bytes.as_ptr() as *const std::ffi::c_void,
+            icns_bytes.len(),
+        );
+
+        if !nsdata.is_null() {
+            // 3. Alloc NSImage: [NSImage alloc]
+            let alloc_msg: MsgSendId = transmute(msg_send_ptr);
+            let nsimage_alloc = alloc_msg(nsimage_class.as_ptr(), Sel::get("alloc").as_ptr());
+
+            if !nsimage_alloc.is_null() {
+                // 4. Init NSImage: [nsimage_alloc initWithData:nsdata]
+                let init_with_data: MsgSendIdId = transmute(msg_send_ptr);
+                let nsimage =
+                    init_with_data(nsimage_alloc, Sel::get("initWithData:").as_ptr(), nsdata);
+
+                if !nsimage.is_null() {
+                    // 5. Set dock icon: [shared_app setApplicationIconImage:nsimage]
+                    let set_icon: MsgSendVoidId = transmute(msg_send_ptr);
+                    set_icon(
+                        shared_app.as_ptr(),
+                        Sel::get("setApplicationIconImage:").as_ptr(),
+                        nsimage,
+                    );
+                }
+            }
+        }
+    }
+    // ===============================================================
 
     // Create and set app delegate BEFORE finishLaunching so callback gets triggered
     let app_delegate = create_app_delegate(&shared_app);
@@ -1140,7 +1181,7 @@ extern "C" fn open_file(_self: *mut c_void, _sel: *mut c_void, _sender: *mut c_v
             // Create array with all extensions
             type MsgSendIdIdArray =
                 extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void;
-            let f_array: MsgSendIdIdArray = transmute(objc_msgSend as *const ());
+            let _f_array: MsgSendIdIdArray = transmute(objc_msgSend as *const ());
 
             let mut array = msg_send_id(ns_array_ptr, Sel::get("array").as_ptr());
 
@@ -1176,7 +1217,7 @@ extern "C" fn open_file(_self: *mut c_void, _sel: *mut c_void, _sender: *mut c_v
                 let path = msg_send_id(url, Sel::get("path").as_ptr());
                 if !path.is_null() {
                     // Convert NSString path to Rust string
-                    let path_cstr: *const c_char = unsafe {
+                    let path_cstr: *const c_char = {
                         let f: extern "C" fn(*mut c_void, *mut c_void) -> *const c_char =
                             transmute(objc_msgSend as *const ());
                         f(path, Sel::get("UTF8String").as_ptr())
@@ -1421,7 +1462,7 @@ fn load_url_content(url: &str) {
 }
 
 /// Show a status alert dialog (must be called from main thread or use thread-safe approach)
-fn show_status_alert(title: &str, message: &str) {
+fn _show_status_alert(title: &str, message: &str) {
     unsafe {
         let ns_alert_class = match ObjCClass::get("NSAlert") {
             Some(c) => c,
@@ -1701,11 +1742,10 @@ extern "C" fn window_should_close(
     _sel: *mut c_void,
     _sender: *mut c_void,
 ) -> u32 {
-    unsafe {
-        let app_class = ObjCClass::get("NSApplication").unwrap();
-        let app = msg_send_id(app_class.as_ptr(), Sel::get("sharedApplication").as_ptr());
-        msg_send_void_id(app, Sel::get("terminate:").as_ptr(), null_mut());
-    }
+    let app_class = ObjCClass::get("NSApplication").unwrap();
+    let app = msg_send_id(app_class.as_ptr(), Sel::get("sharedApplication").as_ptr());
+    msg_send_void_id(app, Sel::get("terminate:").as_ptr(), null_mut());
+
     1 // Return YES
 }
 
